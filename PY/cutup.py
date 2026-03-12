@@ -61,6 +61,24 @@ KEYWORD_WEIGHTS: Dict[str, float] = {
     "license": 1.1,
 }
 
+AGITPROP_MODE_PROFILES: Dict[str, Dict[str, float]] = {
+    "POSTER": {"stack": 0.55, "escalation": 0.5, "contradiction": 0.25, "decree": 0.4, "chant": 0.55},
+    "DECREE": {"stack": 0.75, "escalation": 0.68, "contradiction": 0.38, "decree": 0.9, "chant": 0.3},
+    "COLLAPSE": {"stack": 0.38, "escalation": 0.8, "contradiction": 0.66, "decree": 0.3, "chant": 0.64},
+    "PRESS BRIEFING FROM HELL": {"stack": 0.62, "escalation": 0.8, "contradiction": 0.58, "decree": 0.66, "chant": 0.44},
+    "ADMINISTRATIVE CHANT": {"stack": 0.7, "escalation": 0.58, "contradiction": 0.3, "decree": 0.56, "chant": 0.9},
+    "FALSE PATRIOTIC": {"stack": 0.52, "escalation": 0.74, "contradiction": 0.49, "decree": 0.52, "chant": 0.6},
+    "GHOST BUREAU": {"stack": 0.67, "escalation": 0.63, "contradiction": 0.72, "decree": 0.5, "chant": 0.48},
+    "PUBLIC INTEREST FEVER": {"stack": 0.78, "escalation": 0.82, "contradiction": 0.47, "decree": 0.64, "chant": 0.74},
+}
+
+OFFICIAL_NOUNS = [
+    "PUBLIC", "INTEREST", "PROTOCOL", "AUTHORIZATION", "COMPLIANCE", "DIRECTIVE", "MANDATE",
+    "ACCOUNTABILITY", "COMMITTEE", "CLARIFICATION", "LICENSING", "EMERGENCY", "PATRIOTISM", "MANAGEMENT",
+]
+PROCEDURAL_FILLERS = ["UNDER", "PURSUANT TO", "IN ACCORDANCE WITH", "SUBJECT TO", "PENDING", "WITHOUT PREJUDICE TO"]
+BANAL_CONNECTORS = ["and also", "for now", "as needed", "until further feeling", "in this weather", "for administrative calm"]
+
 # -------------------------------------------------------------------
 # DATA MODELS
 # -------------------------------------------------------------------
@@ -188,6 +206,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rupture-prob", type=float, default=0.35)
     p.add_argument("--stutter-prob", type=float, default=0.32)
     p.add_argument("--text-chaos", type=float, default=0.6)
+    p.add_argument("--absurd-seriousness", type=float, default=0.62, help="Bias toward institutional absurdity and deadpan escalation.")
+    p.add_argument("--agitprop-personality", default="auto", help="Comma-separated modes or auto/all (POSTER, DECREE, COLLAPSE, PRESS BRIEFING FROM HELL, ADMINISTRATIVE CHANT, FALSE PATRIOTIC, GHOST BUREAU, PUBLIC INTEREST FEVER).")
     p.add_argument("--max-words-slogan", type=int, default=11)
     p.add_argument("--export-debug-summary", action="store_true", help="Write run_summary.txt.")
 
@@ -219,6 +239,7 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     args.stutter_prob = clamp(args.stutter_prob, 0.0, 1.0)
     args.ghost_prob = clamp(args.ghost_prob, 0.0, 0.95)
     args.text_chaos = clamp(args.text_chaos, 0.0, 1.5)
+    args.absurd_seriousness = clamp(args.absurd_seriousness, 0.0, 1.0)
     return args
 
 
@@ -382,6 +403,25 @@ def choose_line(bank: List[Line], chaos: float, required_tags: Iterable[str] = (
     return agitprop_weighted_choice(pool, chaos=chaos)
 
 
+def parse_agitprop_personalities(raw: str) -> List[str]:
+    if not raw or raw.strip().lower() in {"auto", "all"}:
+        return list(AGITPROP_MODE_PROFILES.keys())
+    requested = [x.strip().upper() for x in raw.split(",") if x.strip()]
+    canonical = {k.upper(): k for k in AGITPROP_MODE_PROFILES}
+    selected = [canonical[name] for name in requested if name in canonical]
+    return selected or list(AGITPROP_MODE_PROFILES.keys())
+
+
+def resolve_personality(args: argparse.Namespace) -> str:
+    return random.choice(getattr(args, "agitprop_personalities", list(AGITPROP_MODE_PROFILES.keys())))
+
+
+def personality_weight(args: argparse.Namespace, personality: str, key: str, jitter: float = 0.15) -> float:
+    profile = AGITPROP_MODE_PROFILES.get(personality, AGITPROP_MODE_PROFILES["POSTER"])
+    base = profile.get(key, 0.5)
+    return clamp(base * 0.6 + args.absurd_seriousness * 0.8 + random.uniform(-jitter, jitter), 0.0, 1.0)
+
+
 def compress_phrase(text: str, max_words: int = 6) -> str:
     words = [w.upper() for w in TOKEN_RE.findall(text) if len(w) > 2]
     return " ".join(words[: max(1, max_words)]).strip()
@@ -421,18 +461,22 @@ def recursive_burst(text: str) -> str:
 
 def bureaucratic_melt(text: str) -> str:
     swaps = {
-        "public interest": "managed interest",
-        "accountable": "countable",
-        "free speech": "metered speech",
-        "first amendment": "first adjustment",
-        "license": "permission",
-        "authority": "authorized fear",
-        "policy": "signal policy",
+        "public interest": random.choice(["managed interest", "mandatory interest", "interest management"]),
+        "accountable": random.choice(["countable", "procedurally loyal"]),
+        "free speech": random.choice(["metered speech", "licensed speech"]),
+        "first amendment": random.choice(["first adjustment", "preliminary amendment"]),
+        "license": random.choice(["permission", "compliance credential"]),
+        "authority": random.choice(["authorized fear", "managed authority"]),
+        "policy": random.choice(["signal policy", "policy protocol", "policy instrument"]),
+        "department": random.choice(["office", "committee", "bureau"]),
+        "security": random.choice(["stability", "managed alarm"]),
     }
     out = text
     for src, dst in swaps.items():
         out = re.sub(src, dst, out, flags=re.I)
-    return out
+    if random.random() < 0.45:
+        out = f"{out} {random.choice(BANAL_CONNECTORS)}"
+    return clean_text(out)
 
 
 def echo_decay(text: str) -> str:
@@ -518,6 +562,149 @@ def collapse_to_term(text: str) -> str:
     return "\n".join([term] * random.randint(4, 8))
 
 
+def official_noun_stack(text: str, depth: int = 4) -> str:
+    words = [w.upper() for w in cut_words(text) if len(w) > 4]
+    seeds = words[: max(1, depth // 2)]
+    stack = seeds + random.sample(OFFICIAL_NOUNS, k=min(depth, len(OFFICIAL_NOUNS)))
+    return " ".join(stack[: max(2, depth + 1)])
+
+
+def false_decree(base: str, support: str) -> str:
+    clause = random.choice(PROCEDURAL_FILLERS)
+    return (
+        f"BY ORDER OF THE {official_noun_stack(base, 3)}\n"
+        f"{clause} {fragment(support, 2, 6).upper()}\n"
+        f"THIS DECLARATION REMAINS EFFECTIVE UNTIL FURTHER CLARIFICATION"
+    )
+
+
+def procedural_escalation(a: str, b: str) -> str:
+    core = fragment(a, 2, 5).upper()
+    rung2 = official_noun_stack(splice_halves(a, b), 4)
+    rung3 = official_noun_stack(bureaucratic_melt(b), 6)
+    return f"{core}\n{rung2}\n{rung3}\nCOMPLIANCE ESCALATES AUTOMATICALLY"
+
+
+def fake_committee_statement(a: str, b: str) -> str:
+    lead = official_noun_stack(a, 4)
+    tail = fragment(bureaucratic_melt(b), 3, 7).lower()
+    return f"THE STANDING COMMITTEE FOR {lead}\nhas reviewed {tail}\nand approves temporary contradiction"
+
+
+def impossible_administrative_phrase(a: str, b: str) -> str:
+    return f"{official_noun_stack(a, 3)} FOR THE MANAGEMENT OF {fragment(b,2,5).upper()} WITHOUT IMPLEMENTATION"
+
+
+def slogan_inflation(text: str, seriousness: float) -> str:
+    head = compress_phrase(text, max_words=3)
+    rung_count = 3 + int(seriousness * 3)
+    lines = [head]
+    for i in range(2, rung_count + 1):
+        lines.append(official_noun_stack(text, i + 1))
+    lines.append("FOR STABILITY")
+    return "\n".join(lines)
+
+
+def recursive_command_block(command: str, support: str, seriousness: float) -> str:
+    c = fragment(command, 1, 3).upper()
+    suffix = fragment(support, 2, 6).lower()
+    loops = 2 + int(seriousness * 3)
+    return "\n".join([f"{c}. {suffix}" for _ in range(loops)] + [f"REPEAT {c} UNTIL CALM"]) 
+
+
+def deadpan_contradiction_block(a: str, b: str) -> str:
+    decree = fragment(a, 2, 6).upper()
+    anti = fragment(a, 1, 4).upper()
+    bridge = random.choice(BANAL_CONNECTORS)
+    return f"{decree}\nTHIS DOES NOT CONSTITUTE {anti}\n{fragment(b,2,6).lower()} {bridge}"
+
+
+def serious_nonsense_structure(a: str, b: str, seriousness: float) -> str:
+    return (
+        f"{fake_committee_statement(a, b)}\n"
+        f"{recursive_command_block(a, b, seriousness)}\n"
+        f"{impossible_administrative_phrase(b, a)}"
+    )
+
+
+def repetition_drift(text: str, seriousness: float) -> str:
+    pivot = fragment(text, 2, 5).upper()
+    lines = [pivot]
+    loops = 2 + int(seriousness * 4)
+    for _ in range(loops):
+        pivot = bureaucratic_melt(pivot).upper()
+        lines.append(pivot)
+    lines.append(phrase_decay(pivot).lower())
+    return "\n".join(lines)
+
+
+def noun_pressure(a: str, b: str, seriousness: float) -> str:
+    depth = 4 + int(seriousness * 4)
+    base = splice_halves(a, b)
+    return "\n".join(official_noun_stack(base, min(8, 2 + i)) for i in range(1, depth))
+
+
+def fake_policy_language(a: str, b: str) -> str:
+    clause = random.choice(PROCEDURAL_FILLERS)
+    return (
+        f"POLICY INSTRUMENT {official_noun_stack(a, 3)}\n"
+        f"{clause} {fragment(bureaucratic_melt(b), 3, 8).upper()}\n"
+        f"IMPLEMENTATION SHALL PRECEDE EXPLANATION"
+    )
+
+
+def contradictory_mission_statement(a: str, b: str, c: str) -> str:
+    return (
+        f"MISSION: {fragment(a,2,5).upper()}\n"
+        f"COUNTER-MISSION: {fragment(b,2,5).upper()}\n"
+        f"BOTH MISSIONS ARE MANDATORY\n"
+        f"{fragment(c,2,6).lower()}"
+    )
+
+
+def overdetermined_public_interest(a: str, b: str, seriousness: float) -> str:
+    loops = 3 + int(seriousness * 3)
+    phrases = []
+    seed = splice_halves(a, b)
+    for _ in range(loops):
+        seed = bureaucratic_melt(seed)
+        phrases.append(f"PUBLIC INTEREST / {compress_phrase(seed, 4)}")
+    phrases.append("PUBLIC INTEREST REMAINS UNDER REVIEW")
+    return "\n".join(phrases)
+
+
+def command_becomes_bureaucracy_becomes_chant(command: str, support: str, seriousness: float) -> str:
+    cmd = fragment(command, 1, 3).upper()
+    bureau = official_noun_stack(support, 4 + int(seriousness * 3))
+    chant = keyword_pressure(splice_halves(command, support))
+    repeats = [f"{cmd} PURSUANT TO {bureau}" for _ in range(1 + int(seriousness * 2))]
+    return "\n".join([cmd] + repeats + [f"{cmd} ACCORDINGLY", chant])
+
+
+def decree_mode(a: str, b: str, seriousness: float) -> str:
+    return f"{false_decree(a, b)}\n{repetition_drift(a, seriousness)}"
+
+
+def policy_meltdown_mode(a: str, b: str, seriousness: float) -> str:
+    return f"{fake_policy_language(a, b)}\n{noun_pressure(a, b, seriousness)}"
+
+
+def administrative_chant_mode(a: str, b: str, seriousness: float) -> str:
+    return f"{command_becomes_bureaucracy_becomes_chant(a, b, seriousness)}\n{repetition_drift(b, seriousness)}"
+
+
+def patriotic_absurdity_mode(a: str, b: str, c: str) -> str:
+    return f"{contradictory_mission_statement(a, b, c)}\n{official_noun_stack(splice_halves(a, c), 6)}"
+
+
+def committee_nightmare_mode(a: str, b: str, seriousness: float) -> str:
+    return f"{fake_committee_statement(a, b)}\n{procedural_escalation(a, b)}\n{noun_pressure(a, b, seriousness)}"
+
+
+def public_interest_recursion_mode(a: str, b: str, seriousness: float) -> str:
+    return f"{overdetermined_public_interest(a, b, seriousness)}\n{recursive_command_block(a, b, seriousness)}"
+
+
 def transmission_break(a: str, b: str, c: str) -> str:
     return (
         f"{interrupt_with(a, b)}\n"
@@ -527,7 +714,7 @@ def transmission_break(a: str, b: str, c: str) -> str:
     )
 
 
-def rhetorical_pattern(official: str, threat: str, freedom: str, command: str, bridge: str) -> str:
+def rhetorical_pattern(official: str, threat: str, freedom: str, command: str, bridge: str, args: argparse.Namespace, personality: str) -> str:
     patterns = [
         lambda: f"{compress_phrase(official)}\n{interrupt_with(bridge, threat)}\n{collapse_to_term(threat)}\n{phrase_decay(command)}",
         lambda: f"{compress_phrase(freedom)}\n{mirrored_contradiction(freedom, command)}\n{false_restart(command)}",
@@ -535,11 +722,33 @@ def rhetorical_pattern(official: str, threat: str, freedom: str, command: str, b
         lambda: f"{fragment(bridge,2,5)}?\nREFUSAL\n{keyword_pressure(official)}\n{collapse_to_term(threat)}",
         lambda: f"{fragment(official,2,6).upper()}\n{bureaucratic_melt(splice_halves(official, freedom)).lower()}\n{collapse_to_term(command)}",
         lambda: transmission_break(official, threat, bridge),
+        lambda: decree_mode(official, bridge, args.absurd_seriousness),
+        lambda: policy_meltdown_mode(official, threat, args.absurd_seriousness),
+        lambda: administrative_chant_mode(command, bridge, args.absurd_seriousness),
+        lambda: patriotic_absurdity_mode(freedom, command, threat),
+        lambda: committee_nightmare_mode(official, freedom, args.absurd_seriousness),
+        lambda: public_interest_recursion_mode(official, bridge, args.absurd_seriousness),
     ]
-    return random.choice(patterns)()
+    weights = []
+    for idx, _ in enumerate(patterns):
+        w = 1.0
+        if idx in {6, 10}:
+            w += personality_weight(args, personality, "decree")
+        if idx in {7, 8, 10, 11}:
+            w += personality_weight(args, personality, "escalation")
+        if idx in {1, 9}:
+            w += personality_weight(args, personality, "contradiction")
+        if idx in {7, 10, 11}:
+            w += personality_weight(args, personality, "stack")
+        if idx in {8, 11}:
+            w += personality_weight(args, personality, "chant")
+        if idx >= 6:
+            w += args.absurd_seriousness * 0.95
+        weights.append(max(0.1, w))
+    return random.choices(patterns, weights=weights, k=1)[0]()
 
 
-def build_slogan(top300: List[Line], full: List[Line], args: argparse.Namespace) -> str:
+def build_slogan(top300: List[Line], full: List[Line], args: argparse.Namespace, personality: str) -> str:
     used: set[str] = set()
     a = choose_line(top300, args.text_chaos, excluded_texts=used)
     used.add(a.text)
@@ -557,13 +766,38 @@ def build_slogan(top300: List[Line], full: List[Line], args: argparse.Namespace)
         lambda: f"{ladder_phrase(c.text)}\n{keyword_pressure(b.text)}",
         lambda: f"{false_restart(splice_halves(a.text, c.text))}\n{glitch_gap(b.text)}",
         lambda: transmission_break(a.text, c.text, d.text),
+        lambda: decree_mode(a.text, b.text, args.absurd_seriousness),
+        lambda: policy_meltdown_mode(c.text, d.text, args.absurd_seriousness),
+        lambda: administrative_chant_mode(a.text, d.text, args.absurd_seriousness),
+        lambda: patriotic_absurdity_mode(a.text, b.text, c.text),
+        lambda: committee_nightmare_mode(a.text, c.text, args.absurd_seriousness),
+        lambda: public_interest_recursion_mode(b.text, d.text, args.absurd_seriousness),
+        lambda: contradictory_mission_statement(a.text, b.text, d.text),
+        lambda: noun_pressure(a.text, c.text, args.absurd_seriousness),
     ]
     if random.random() < args.stutter_prob:
         ops.append(lambda: f"{stutter_phrase(a.text)}\n{recursive_burst(c.text)}\n{glitch_gap(d.text)}")
     if random.random() < args.rupture_prob:
         ops.append(lambda: f"{splice_halves(a.text, c.text).upper()}\n/// SIGNAL CUT ///\n{collapse_to_term(b.text)}")
 
-    out = random.choice(ops)()
+    weights = []
+    for idx, _ in enumerate(ops):
+        w = 0.85
+        if idx in {5, 10, 13}:
+            w += personality_weight(args, personality, "chant")
+        if idx in {8, 12}:
+            w += personality_weight(args, personality, "decree")
+        if idx in {9, 10, 12, 15}:
+            w += personality_weight(args, personality, "escalation")
+        if idx in {3, 11, 14}:
+            w += personality_weight(args, personality, "contradiction")
+        if idx in {9, 12, 13, 15}:
+            w += personality_weight(args, personality, "stack")
+        if idx >= 8:
+            w += args.absurd_seriousness * 1.05
+        weights.append(max(0.1, w))
+
+    out = random.choices(ops, weights=weights, k=1)[0]()
     words = cut_words(out)
     if len(words) > args.max_words_slogan * 2:
         trimmed = words[: args.max_words_slogan * 2]
@@ -572,7 +806,7 @@ def build_slogan(top300: List[Line], full: List[Line], args: argparse.Namespace)
     return out.strip()
 
 
-def build_broadcast(top300: List[Line], full: List[Line], args: argparse.Namespace) -> str:
+def build_broadcast(top300: List[Line], full: List[Line], args: argparse.Namespace, personality: str) -> str:
     used: set[str] = set()
     official = choose_line(top300, args.text_chaos, ["official"], used, True)
     used.add(official.text)
@@ -582,14 +816,18 @@ def build_broadcast(top300: List[Line], full: List[Line], args: argparse.Namespa
     used.add(freedom.text)
     command = choose_line(top300, args.text_chaos, ["command"], used, True)
     bridge = choose_line(full, args.text_chaos, excluded_texts=used)
-    return rhetorical_pattern(official.text, threat.text, freedom.text, command.text, bridge.text)
+    return rhetorical_pattern(official.text, threat.text, freedom.text, command.text, bridge.text, args, personality)
 
 
-def build_chant_cell(top300: List[Line], full: List[Line], args: argparse.Namespace) -> Dict[str, str]:
+def build_chant_cell(top300: List[Line], full: List[Line], args: argparse.Namespace, personality: str) -> Dict[str, str]:
     use_full = random.random() < 0.3
     line = choose_line(full if use_full else top300, args.text_chaos)
     partner = choose_line(top300 if use_full else full, args.text_chaos)
-    mode = random.choice(["chant", "loop", "burst", "call", "splice", "stutter", "echo_decay", "ladder", "triplet", "pulse_break", "collapse"])
+    anchor = choose_line(top300, args.text_chaos)
+    mode = random.choice([
+        "chant", "loop", "burst", "call", "splice", "stutter", "echo_decay", "ladder", "triplet", "pulse_break", "collapse",
+        "decree_mode", "policy_meltdown_mode", "administrative_chant_mode", "patriotic_absurdity_mode", "committee_nightmare_mode", "public_interest_recursion_mode",
+    ])
 
     if mode == "chant":
         text, delivery = compress_phrase(line.text, args.max_words_slogan), "shouted"
@@ -612,8 +850,18 @@ def build_chant_cell(top300: List[Line], full: List[Line], args: argparse.Namesp
         text, delivery = f"{keyword_pressure(line.text)}\n--\n{glitch_gap(partner.text)}", "pulse break"
     elif mode == "collapse":
         text, delivery = collapse_to_term(line.text), "collapse loop"
+    elif mode == "decree_mode":
+        text, delivery = decree_mode(line.text, partner.text, args.absurd_seriousness), "decree recital"
+    elif mode == "policy_meltdown_mode":
+        text, delivery = policy_meltdown_mode(line.text, partner.text, args.absurd_seriousness), "policy meltdown"
+    elif mode == "administrative_chant_mode":
+        text, delivery = administrative_chant_mode(line.text, partner.text, args.absurd_seriousness), "administrative chant"
+    elif mode == "patriotic_absurdity_mode":
+        text, delivery = patriotic_absurdity_mode(line.text, partner.text, anchor.text), "false patriotic"
+    elif mode == "committee_nightmare_mode":
+        text, delivery = committee_nightmare_mode(line.text, partner.text, args.absurd_seriousness), "committee nightmare"
     else:
-        text, delivery = stutter_phrase(line.text), "stutter chant"
+        text, delivery = public_interest_recursion_mode(line.text, partner.text, args.absurd_seriousness), "public-interest recursion"
 
     return {
         "mode": mode,
@@ -625,6 +873,7 @@ def build_chant_cell(top300: List[Line], full: List[Line], args: argparse.Namesp
         "cue_index": str(line.cue_index),
         "start_tc": line.start_tc,
         "end_tc": line.end_tc,
+        "personality": personality,
     }
 
 
@@ -647,16 +896,16 @@ def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunS
     agit_out = output_root / "agitprop"
     agit_out.mkdir(parents=True, exist_ok=True)
 
-    slogans = [build_slogan(top300, full, args) for _ in range(max(1, args.agitprop_count))]
-    broadcasts = [build_broadcast(top300, full, args) for _ in range(max(1, args.broadcast_count))]
-    chant_cells = [build_chant_cell(top300, full, args) for _ in range(max(1, args.chant_count))]
+    slogans = [build_slogan(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.agitprop_count))]
+    broadcasts = [build_broadcast(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.broadcast_count))]
+    chant_cells = [build_chant_cell(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.chant_count))]
 
     (agit_out / "slogans.txt").write_text("\n\n".join(s.strip() for s in slogans) + "\n", encoding="utf-8")
     (agit_out / "broadcasts.txt").write_text("\n\n".join(s.strip() for s in broadcasts) + "\n", encoding="utf-8")
 
     chant_path = agit_out / "chant_cells.csv"
     with chant_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["mode", "text", "delivery", "source_bank", "file", "clip_id", "cue_index", "start_tc", "end_tc"])
+        writer = csv.DictWriter(f, fieldnames=["mode", "text", "delivery", "source_bank", "file", "clip_id", "cue_index", "start_tc", "end_tc", "personality"])
         writer.writeheader()
         writer.writerows(chant_cells)
 
@@ -852,14 +1101,48 @@ def weighted_choice(samples: List[SampleFile], concrete: bool) -> SampleFile:
 
 def section_profile(progress: float, args: argparse.Namespace) -> Dict[str, float]:
     if progress < 0.2:
-        return {"name": "ENTRY", "dens": 0.48, "frag_mul": 1.35, "repeat": 0.18, "reverse": 0.13, "filt": 0.48, "silence": args.silence_prob + 0.12, "ghost": args.ghost_prob * 0.6}
+        return {"name": "ENTRY", "dens": 0.44, "frag_mul": 1.28, "repeat": 0.2, "reverse": 0.14, "filt": 0.52, "silence": args.silence_prob + 0.16, "ghost": args.ghost_prob * 0.72}
     if progress < 0.45:
-        return {"name": "BUILD", "dens": 1.05, "frag_mul": 0.86, "repeat": 0.36, "reverse": 0.2, "filt": 0.68, "silence": args.silence_prob * 0.92, "ghost": args.ghost_prob + 0.05}
+        return {"name": "BUILD", "dens": 1.18, "frag_mul": 0.82, "repeat": 0.42, "reverse": 0.22, "filt": 0.72, "silence": args.silence_prob * 0.88, "ghost": args.ghost_prob + 0.08}
     if progress < 0.68:
-        return {"name": "PRESSURE", "dens": 1.55, "frag_mul": 0.48, "repeat": 0.56, "reverse": 0.34, "filt": 0.9, "silence": args.silence_prob * 0.55, "ghost": args.ghost_prob + 0.16}
+        return {"name": "PRESSURE", "dens": 1.72, "frag_mul": 0.42, "repeat": 0.64, "reverse": 0.36, "filt": 0.92, "silence": args.silence_prob * 0.5, "ghost": args.ghost_prob + 0.19}
     if progress < 0.86:
-        return {"name": "COLLAPSE", "dens": 0.72, "frag_mul": 0.35, "repeat": 0.66, "reverse": 0.52, "filt": 0.96, "silence": args.silence_prob + 0.2, "ghost": args.ghost_prob + 0.24}
-    return {"name": "AFTERIMAGE", "dens": 0.32, "frag_mul": 0.28, "repeat": 0.74, "reverse": 0.62, "filt": 0.98, "silence": args.silence_prob + 0.28, "ghost": args.ghost_prob + 0.35}
+        return {"name": "COLLAPSE", "dens": 0.66, "frag_mul": 0.3, "repeat": 0.72, "reverse": 0.58, "filt": 0.98, "silence": args.silence_prob + 0.28, "ghost": args.ghost_prob + 0.3}
+    return {"name": "AFTERIMAGE", "dens": 0.3, "frag_mul": 0.24, "repeat": 0.78, "reverse": 0.68, "filt": 0.99, "silence": args.silence_prob + 0.33, "ghost": args.ghost_prob + 0.42}
+
+
+def section_plan(total_ms: int) -> Dict[str, Tuple[int, int]]:
+    marks = [0, int(total_ms * 0.2), int(total_ms * 0.45), int(total_ms * 0.68), int(total_ms * 0.86), total_ms]
+    names = list(SECTION_NAMES)
+    return {name: (marks[i], marks[i + 1]) for i, name in enumerate(names)}
+
+
+def clamp_to_section(position_ms: int, span: Tuple[int, int], frag_len: int) -> int:
+    start, end = span
+    room_end = max(start, end - max(10, frag_len + 4))
+    return int(clamp(position_ms, start, room_end))
+
+
+def command_cell_swarm(audio: AudioSegment, profile: Dict[str, float]) -> Tuple[AudioSegment, bool]:
+    if len(audio) < 45 or random.random() > (0.18 + profile["repeat"] * 0.42):
+        return audio, False
+    cell_len = random.randint(35, min(240, len(audio)))
+    start = random.randint(0, max(0, len(audio) - cell_len))
+    cell = audio[start : start + cell_len]
+    if random.random() < 0.52:
+        cell = low_pass_filter(cell, random.choice([1800, 2300, 3200]))
+    if random.random() < 0.45:
+        cell = high_pass_filter(cell, random.choice([180, 340, 520]))
+    swarm = AudioSegment.silent(duration=0, frame_rate=audio.frame_rate)
+    repeats = random.randint(3, 8)
+    for i in range(repeats):
+        beat = cell if i % 3 != 2 else cell.reverse()
+        if random.random() < 0.3:
+            beat = change_speed(beat, random.choice([0.88, 0.96, 1.08, 1.18]))
+        swarm += beat + AudioSegment.silent(duration=random.randint(7, 48), frame_rate=audio.frame_rate)
+    if random.random() < 0.35:
+        swarm += audio[-min(len(audio), random.randint(40, 160)) :]
+    return swarm, True
 
 
 def safe_slice_fragment(audio: AudioSegment, min_ms: int, max_ms: int, frag_mul: float) -> AudioSegment:
@@ -940,6 +1223,11 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], concrete: boo
             built += audio + gap
         audio = built
 
+    swarm_mode = False
+    audio, swarm_mode = command_cell_swarm(audio, profile)
+    if swarm_mode:
+        repeated = max(repeated, 3)
+
     if random.random() < (0.22 if concrete else 0.14):
         # hard interruption: chop center out to create phrase discontinuity.
         mid = len(audio) // 2
@@ -966,6 +1254,8 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], concrete: boo
     transform = "grain" if grain_mode else "slice"
     if reversed_flag:
         transform += "+rev"
+    if swarm_mode:
+        transform += "+swarm"
     return audio, {"reversed": reversed_flag, "speed": speed, "repeated": repeated, "hp_hz": hp, "lp_hz": lp, "grain_mode": grain_mode, "transformation": transform}
 
 
@@ -977,13 +1267,57 @@ def export_manifest(path: Path, events: List[Event]) -> None:
             writer.writerow(e.__dict__)
 
 
+def build_section_score(events: List[Event]) -> str:
+    if not events:
+        return "NO EVENTS\n"
+    by_section: Dict[str, List[Event]] = {name: [] for name in SECTION_NAMES}
+    for e in events:
+        by_section.setdefault(e.section, []).append(e)
+
+    lines: List[str] = ["CUTUP AUDIO SCORE", "ARCHIVE OF AESTHETIC POSSIBILITY", ""]
+    for sec in SECTION_NAMES:
+        items = sorted(by_section.get(sec, []), key=lambda ev: (ev.start_ms, ev.layer))
+        if not items:
+            continue
+        layer_counts = Counter(ev.layer for ev in items)
+        transformations = Counter(ev.transformation for ev in items)
+        insistence = sum(1 for ev in items if ev.repeated >= 3 or ev.from_memory)
+        dominant_sources = Counter(ev.source_basename for ev in items).most_common(3)
+        source_phrase = ", ".join(name for name, _ in dominant_sources) if dominant_sources else "none"
+        top_transform = transformations.most_common(1)[0][0] if transformations else "slice"
+
+        lines.append(f"[{sec}]  events={len(items)}  insistence={insistence}  dominant_transform={top_transform}")
+        lines.append(f"  layers: main={layer_counts.get('voice_main', 0)} cuts={layer_counts.get('voice_cuts', 0)} ghosts={layer_counts.get('ghosts', 0)}")
+        lines.append(f"  recurring sources: {source_phrase}")
+
+        highlights = sorted(items, key=lambda ev: (ev.recurrence_index, ev.repeated, ev.fragment_duration_ms), reverse=True)[:3]
+        for h in highlights:
+            mm = int(h.start_ms // 60000)
+            ss = int((h.start_ms % 60000) // 1000)
+            ms = int(h.start_ms % 1000)
+            stamp = f"{mm:02d}:{ss:02d}.{ms:03d}"
+            lines.append(
+                f"    - {stamp} {h.layer_role.upper()} {h.source_basename} "
+                f"x{h.repeated} rec#{h.recurrence_index} {h.transformation}"
+            )
+        lines.append("")
+
+    lines.extend([
+        "COMPOSITION NOTE:",
+        "Each recurrence is an argument with itself; each ghost return is a short-circuit in control speech.",
+    ])
+    return "\n".join(lines).strip() + "\n"
+
+
 def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     ghosts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     events: List[Event] = []
     memory: Deque[SampleFile] = deque(maxlen=max(1, args.memory_depth))
+    recurrence_memory: Deque[Tuple[SampleFile, AudioSegment, Dict[str, object], str]] = deque(maxlen=max(3, args.memory_depth * 2))
     recurrence_count: Dict[str, int] = {}
+    plan = section_plan(total_ms)
 
     n_events = choose_event_count(total_ms / 1000.0, args.density, args.sectional)
     current_anchor = 0
@@ -994,6 +1328,11 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             start = random.randint(0, max(0, total_ms - 1200))
             dur = random.randint(140, 1800)
             dead_air_windows.append((start, min(total_ms, start + dur)))
+        for _, (sec_start, sec_end) in plan.items():
+            if random.random() < 0.66:
+                width = random.randint(120, 980)
+                center = random.randint(sec_start, max(sec_start, sec_end - 1))
+                dead_air_windows.append((max(0, center - width // 2), min(total_ms, center + width // 2)))
 
     def in_dead_air(position_ms: int) -> bool:
         return any(a <= position_ms <= b for a, b in dead_air_windows)
@@ -1002,14 +1341,28 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         progress = i / max(1, n_events - 1)
         profile = section_profile(progress, args) if args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": args.silence_prob, "ghost": args.ghost_prob}
 
-        memory_bias = args.recurrence_prob + (0.1 if profile["name"] in {"COLLAPSE", "AFTERIMAGE"} else 0.0)
-        from_memory = bool(memory and random.random() < clamp(memory_bias, 0.0, 0.97))
-        sample = random.choice(list(memory)) if from_memory else weighted_choice(samples, args.concrete)
+        sec_name = str(profile["name"])
+        sec_span = plan.get(sec_name, (0, total_ms))
+        memory_bias = args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
+        use_recurrence_fragment = bool(recurrence_memory and random.random() < clamp(memory_bias * (1.4 if sec_name in {"PRESSURE", "COLLAPSE"} else 1.0), 0.0, 0.97))
+        from_memory = False
+        if use_recurrence_fragment:
+            sample, shaped, meta, _ = random.choice(list(recurrence_memory))
+            from_memory = True
+            if random.random() < 0.34:
+                shaped = change_speed(shaped, random.choice([0.84, 0.92, 1.05, 1.16]))
+            if random.random() < 0.38:
+                shaped = low_pass_filter(shaped, random.choice([1500, 2100, 2800]))
+            if random.random() < 0.28:
+                shaped = shaped.reverse()
+            meta = dict(meta)
+            meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
+        else:
+            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, args.concrete)
+            src = AudioSegment.from_file(sample.path).set_frame_rate(args.sample_rate).set_channels(2)
+            frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]))
+            shaped, meta = shape_fragment(frag, profile, args.concrete)
         recurrence_count[str(sample.path)] = recurrence_count.get(str(sample.path), 0) + 1
-
-        src = AudioSegment.from_file(sample.path).set_frame_rate(args.sample_rate).set_channels(2)
-        frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]))
-        shaped, meta = shape_fragment(frag, profile, args.concrete)
 
         layer = random.choices(
             ["voice_main", "voice_cuts", "ghosts"],
@@ -1017,6 +1370,8 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             k=1,
         )[0]
         if random.random() < profile["ghost"]:
+            layer = "ghosts"
+        if sec_name == "AFTERIMAGE" and random.random() < 0.58:
             layer = "ghosts"
 
         if args.arrangement_style == "collapse":
@@ -1027,12 +1382,18 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             step = max(70, int(random.randint(350, 2200) / max(0.4, float(profile["dens"]))))
 
         pos = random.randint(0, 500) if i == 0 else max(0, current_anchor + jitter)
+        pos = clamp_to_section(pos, sec_span, len(shaped))
         if in_dead_air(pos):
             # honor silence windows as structural punctuation.
-            pos = min(total_ms - 1, pos + random.randint(220, 1400))
+            move = random.randint(220, 1400)
+            if sec_name in {"COLLAPSE", "AFTERIMAGE"} and random.random() < 0.6:
+                pos = clamp_to_section(max(0, pos - move // 2), sec_span, len(shaped))
+            else:
+                pos = clamp_to_section(min(total_ms - 1, pos + move), sec_span, len(shaped))
 
         if pos + len(shaped) >= total_ms:
             pos = max(0, total_ms - len(shaped) - random.randint(10, 220))
+        pos = clamp_to_section(pos, sec_span, len(shaped))
         current_anchor = min(total_ms - 50, pos + step)
 
         gain = random.uniform(-10.0, -2.5) if layer == "voice_main" else random.uniform(-13.0, -5.5) if layer == "voice_cuts" else random.uniform(-18.0, -8.0)
@@ -1048,13 +1409,38 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 placed = low_pass_filter(placed, random.choice([1600, 2200, 3000]))
             ghosts = ghosts.overlay(placed, position=pos)
 
-        if args.sectional and random.random() < 0.18 and recurrence_count[str(sample.path)] > 1:
+        if args.sectional and random.random() < (0.18 if sec_name not in {"COLLAPSE", "AFTERIMAGE"} else 0.3) and recurrence_count[str(sample.path)] > 1:
             # ghost return: delayed, filtered recurrence of same material.
             back_pos = min(total_ms - 1, pos + random.randint(160, 2600))
             ghost_copy = low_pass_filter(shaped.reverse(), random.choice([1200, 1800, 2400])).apply_gain(random.uniform(-15, -9))
             ghosts = ghosts.overlay(ghost_copy, position=back_pos)
 
+        if sec_name in {"PRESSURE", "COLLAPSE"} and random.random() < 0.2:
+            # insistence burst: command cell repeats as abrupt authority punctuation.
+            cell_len = min(len(shaped), random.randint(40, 180))
+            if cell_len > 20:
+                cell = shaped[:cell_len]
+                echoes = random.randint(2, 5)
+                cursor = pos + random.randint(35, 260)
+                for _ in range(echoes):
+                    if cursor >= total_ms - 20:
+                        break
+                    variant = cell.reverse() if random.random() < 0.22 else cell
+                    variant = low_pass_filter(variant, random.choice([1400, 1800, 2400]))
+                    ghosts = ghosts.overlay(variant.apply_gain(random.uniform(-16, -10)), position=cursor)
+                    cursor += random.randint(30, 190)
+
+        if sec_name in {"COLLAPSE", "AFTERIMAGE"} and random.random() < 0.16:
+            # sudden single-word return: tiny direct restatement in the center channel.
+            blip_len = min(len(shaped), random.randint(24, 130))
+            if blip_len > 12:
+                blip_start = random.randint(0, max(0, len(shaped) - blip_len))
+                blip = shaped[blip_start : blip_start + blip_len]
+                blip_pos = clamp_to_section(pos + random.randint(120, 1100), sec_span, len(blip))
+                voice_main = voice_main.overlay(blip.apply_gain(random.uniform(-9, -3)), position=blip_pos)
+
         memory.append(sample)
+        recurrence_memory.append((sample, shaped, meta, sec_name))
         rec_idx = recurrence_count[str(sample.path)]
         events.append(
             Event(
@@ -1110,13 +1496,15 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     hiss.export(stems_dir / "hiss_bed.wav", format="wav")
     master_path = variant_dir / f"{variant_name}_master.wav"
     event_path = variant_dir / f"{variant_name}_events.csv"
+    score_path = variant_dir / f"{variant_name}_score.txt"
     master.export(master_path, format="wav")
     export_manifest(event_path, events)
+    score_path.write_text(build_section_score(events), encoding="utf-8")
 
     summary.audio_events += len(events)
     summary.section_distribution.update([e.section for e in events])
     summary.recurring_sources.update([e.source_basename for e in events if e.recurrence_index > 1])
-    summary.output_paths.extend([str(master_path), str(event_path)])
+    summary.output_paths.extend([str(master_path), str(event_path), str(score_path)])
 
 
 def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary) -> None:
@@ -1185,6 +1573,7 @@ def maybe_export_debug_summary(summary: RunSummary, output_root: Path) -> None:
 
 def main() -> None:
     args = validate_args(parse_args())
+    args.agitprop_personalities = parse_agitprop_personalities(args.agitprop_personality)
     random.seed(args.seed)
 
     output_root = Path(args.output).expanduser().resolve()
