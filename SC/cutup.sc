@@ -51,7 +51,10 @@ s.waitForBoot({
 
 	~loaderRoutine = nil;
 	~isLoading = false;
+	~loadAttemptId = 0;
 	~loadTargetCount = 0;
+	~loadDoneCount = 0;
+	~loadFailCount = 0;
 	~loadedCount = 0;
 
 	~density = \medium;
@@ -147,6 +150,9 @@ s.waitForBoot({
 	};
 
 	~hardStopCuts = {
+		if(~active[\cuts].notNil and: { ~active[\cuts].respondsTo(\stop) }) {
+			try { ~active[\cuts].stop };
+		};
 		if(~cutsGroup.notNil) { try { ~cutsGroup.freeAll } };
 		~active.removeAt(\cuts);
 		{ if(~cutsBtn.notNil) { ~cutsBtn.value = 0 } }.defer;
@@ -171,6 +177,9 @@ s.waitForBoot({
 	};
 
 	~stopSceneOnly = {
+		if(~active[\scene].notNil and: { ~active[\scene].respondsTo(\stop) }) {
+			try { ~active[\scene].stop };
+		};
 		~active.removeAt(\scene);
 		{ if(~sceneBtn.notNil) { ~sceneBtn.value = 0 } }.defer;
 	};
@@ -189,6 +198,7 @@ s.waitForBoot({
 	};
 
 	~stopLoader = {
+		~loadAttemptId = ~loadAttemptId + 1;
 		~isLoading = false;
 		~active.removeAt(\loader);
 		~loaderRoutine = nil;
@@ -199,10 +209,42 @@ s.waitForBoot({
 		~buffers.clear;
 		~sampleMeta.clear;
 		~allPaths.clear;
+		~loadDoneCount = 0;
+		~loadFailCount = 0;
 		~loadedCount = 0;
 		~loadTargetCount = 0;
 		~setCount.("Loaded: 0");
 		~setProgress.(0);
+	};
+
+	// Single source of truth for usable loaded audio.
+	~buffersReady = {
+		^(~loadedCount > 0)
+		and: { ~buffers.notEmpty }
+		and: { ~sampleMeta.notEmpty }
+		and: { ~buffers.size == ~sampleMeta.size };
+	};
+
+	~loadingInProgress = {
+		^(~isLoading)
+		and: { ~loadTargetCount > 0 }
+		and: { ~loadDoneCount < ~loadTargetCount };
+	};
+
+	~canStartPlayback = { |btn=nil|
+		if(~loadingInProgress.()) {
+			~setStatus.("Loading in progress — wait for READY");
+			{ if(btn.notNil) { btn.value = 0 } }.defer;
+			^false;
+		};
+
+		if(~buffersReady.().not) {
+			~setStatus.("No buffers loaded — press LOAD first");
+			{ if(btn.notNil) { btn.value = 0 } }.defer;
+			^false;
+		};
+
+		^true;
 	};
 
 	// ============================================================
@@ -236,7 +278,6 @@ s.waitForBoot({
 		files = files.asArray.sort;
 
 		("WAV FILES FOUND: " ++ files.size).postln;
-		files.do { |p| p.postln };
 
 		if(files.isEmpty) {
 			~setStatus.("No .wav files found");
@@ -304,9 +345,16 @@ s.waitForBoot({
 	// LOADING
 	// ============================================================
 
-	~loadOnePath = { |path|
+	~loadOnePath = { |path, attemptId|
 		Buffer.read(s, path, action: { |b|
 			var dur;
+
+			if(attemptId != ~loadAttemptId) {
+				if(b.notNil) { try { b.free } };
+				^nil;
+			};
+
+			~loadDoneCount = ~loadDoneCount + 1;
 
 			if(b.notNil and: { b.numFrames > 0 }) {
 				dur = b.numFrames / b.sampleRate;
@@ -323,7 +371,7 @@ s.waitForBoot({
 
 				~loadedCount = ~loadedCount + 1;
 
-				("BUFFER OK: " ++ PathName.new(path).fileName ++ " | total=" ++ ~loadedCount).postln;
+				("BUFFER OK: " ++ PathName.new(path).fileName ++ " | loaded=" ++ ~loadedCount ++ " done=" ++ ~loadDoneCount ++ "/" ++ ~loadTargetCount).postln;
 
 				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount);
 				~setStatus.("Loaded: " ++ PathName.new(path).fileName);
@@ -332,23 +380,37 @@ s.waitForBoot({
 					~setProgress.(0.25 + ((~loadedCount / ~loadTargetCount) * 0.75));
 				};
 
-				if(~loadedCount >= ~loadTargetCount) {
-					~isLoading = false;
-					~active.removeAt(\loader);
-					~loaderRoutine = nil;
-					~setStatus.("READY");
-					~setCount.("Loaded: " ++ ~loadedCount);
-					~setProgress.(1.0);
-				};
 			} {
+				~loadFailCount = ~loadFailCount + 1;
 				("FAILED TO LOAD BUFFER: " ++ path).warn;
+				("BUFFER FAIL: " ++ PathName.new(path).fileName ++ " | fail=" ++ ~loadFailCount ++ " done=" ++ ~loadDoneCount ++ "/" ++ ~loadTargetCount).postln;
 				if(b.notNil) { try { b.free } };
+			};
+
+			if(~loadDoneCount >= ~loadTargetCount) {
+				~isLoading = false;
+				~active.removeAt(\loader);
+				~loaderRoutine = nil;
+
+				if(~buffersReady.()) {
+					("READY: buffers=" ++ ~buffers.size ++ " sampleMeta=" ++ ~sampleMeta.size ++ " fail=" ++ ~loadFailCount).postln;
+					~setStatus.("READY");
+					~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount);
+					~setProgress.(1.0);
+				} {
+					("READY FAILED: loaded=" ++ ~loadedCount ++ " target=" ++ ~loadTargetCount ++ " fail=" ++ ~loadFailCount).warn;
+					~setStatus.("Load failed — no usable buffers");
+					~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount ++ " (fail: " ++ ~loadFailCount ++ ")");
+					~setProgress.(0);
+				};
 			};
 		});
 	};
 
 	~loadSamplesAsync = {
 		var files;
+
+		var attemptId;
 
 		~sampleRoot = ~sampleRoot.asString.standardizePath;
 		("LOAD -> " ++ ~sampleRoot).postln;
@@ -368,8 +430,12 @@ s.waitForBoot({
 
 		~allPaths = files;
 		~loadTargetCount = ~allPaths.size;
+		~loadDoneCount = 0;
+		~loadFailCount = 0;
 		~loadedCount = 0;
 		~isLoading = true;
+		~loadAttemptId = ~loadAttemptId + 1;
+		attemptId = ~loadAttemptId;
 
 		~setStatus.("Loading wav files...");
 		~setCount.("Loaded: 0 / " ++ ~loadTargetCount);
@@ -377,7 +443,7 @@ s.waitForBoot({
 
 		~allPaths.do { |path|
 			("QUEUE LOAD: " ++ path).postln;
-			~loadOnePath.(path);
+			~loadOnePath.(path, attemptId);
 		};
 	};
 
@@ -523,9 +589,8 @@ s.waitForBoot({
 	// ============================================================
 
 	~startCuts = {
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
-			^nil;
+		if(~canStartPlayback.(~cutsBtn).not) {
+			^false;
 		};
 
 		~hardStopCuts.();
@@ -577,14 +642,14 @@ s.waitForBoot({
 		}).play(SystemClock);
 
 		~setStatus.("Cuts running");
+		^true;
 	};
 
 	~startLoops = { |numVoices = 4|
 		var voices;
 
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
-			^nil;
+		if(~canStartPlayback.(~loopsBtn).not) {
+			^false;
 		};
 
 		~hardStopLoops.();
@@ -617,14 +682,14 @@ s.waitForBoot({
 
 		~active[\loops] = voices;
 		~setStatus.("Loops running");
+		^true;
 	};
 
 	~startGhosts = { |numVoices = 3|
 		var voices;
 
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
-			^nil;
+		if(~canStartPlayback.(~ghostsBtn).not) {
+			^false;
 		};
 
 		~hardStopGhosts.();
@@ -652,14 +717,14 @@ s.waitForBoot({
 
 		~active[\ghosts] = voices;
 		~setStatus.("Ghosts running");
+		^true;
 	};
 
 	~startCloud = { |numVoices = 4|
 		var voices;
 
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
-			^nil;
+		if(~canStartPlayback.(~cloudBtn).not) {
+			^false;
 		};
 
 		~hardStopCloud.();
@@ -685,6 +750,7 @@ s.waitForBoot({
 
 		~active[\cloud] = voices;
 		~setStatus.("Cloud running");
+		^true;
 	};
 
 	~startScene = {
@@ -692,9 +758,8 @@ s.waitForBoot({
 
 		("SCENE CHECK -> buffers: " ++ ~buffers.size ++ " sampleMeta: " ++ ~sampleMeta.size).postln;
 
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
-			^nil;
+		if(~canStartPlayback.(~sceneBtn).not) {
+			^false;
 		};
 
 		~stopSceneOnly.();
@@ -756,13 +821,13 @@ s.waitForBoot({
 
 		~active[\scene] = sceneRoutine;
 		~setStatus.("Scene running");
+		^true;
 	};
 
 	~stab = {
 		var idx, meta, dur, fragDur, start;
 
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
+		if(~canStartPlayback.().not) {
 			^nil;
 		};
 
@@ -794,8 +859,7 @@ s.waitForBoot({
 	~phraseShot = {
 		var idx, meta, dur, fragDur, start;
 
-		if(~buffers.isEmpty) {
-			~setStatus.("No buffers loaded — press LOAD first");
+		if(~canStartPlayback.().not) {
 			^nil;
 		};
 
@@ -1127,11 +1191,13 @@ s.waitForBoot({
 			.action_({
 				~stopLoader.();
 				~setStatus.("Loader stopped");
+				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount ++ " (stopped)");
 			});
 
 		Button(win, Rect(900, 360, 170, 36))
 			.states_([["FREE BUFFERS"]])
 			.action_({
+				~stopLoader.();
 				~stopAll.();
 				~freeBuffers.();
 				~setStatus.("Buffers freed");
