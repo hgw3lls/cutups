@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import random
 import re
+import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -168,6 +170,72 @@ class RunSummary:
     output_paths: List[str] = field(default_factory=list)
 
 
+@dataclass
+class LiveControlState:
+    enabled: bool = False
+    control_file: Optional[Path] = None
+    poll_ms: int = 250
+    telemetry_path: Optional[Path] = None
+    last_poll_ms: int = 0
+    last_mtime_ns: int = -1
+    overrides: Dict[str, float] = field(default_factory=dict)
+
+    def poll(self) -> None:
+        if not self.enabled or not self.control_file:
+            return
+        now_ms = int(time.time() * 1000)
+        if now_ms - self.last_poll_ms < self.poll_ms:
+            return
+        self.last_poll_ms = now_ms
+        try:
+            stat = self.control_file.stat()
+        except OSError:
+            return
+        if stat.st_mtime_ns == self.last_mtime_ns:
+            return
+        self.last_mtime_ns = stat.st_mtime_ns
+        try:
+            payload = json.loads(self.control_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+
+        accepted = {
+            "absurd_seriousness": (0.0, 1.0),
+            "text_chaos": (0.0, 1.5),
+            "rupture_prob": (0.0, 1.0),
+            "stutter_prob": (0.0, 1.0),
+            "recurrence_prob": (0.0, 0.95),
+            "ghost_prob": (0.0, 0.95),
+            "silence_prob": (0.0, 0.95),
+        }
+        for key, (low, high) in accepted.items():
+            val = payload.get(key)
+            if isinstance(val, (int, float)):
+                self.overrides[key] = clamp(float(val), low, high)
+
+    def value(self, args: argparse.Namespace, key: str) -> float:
+        self.poll()
+        base = getattr(args, key)
+        return float(self.overrides.get(key, base))
+
+    def telemetry(self, where: str, **fields: object) -> None:
+        if not self.enabled or not self.telemetry_path:
+            return
+        row = {
+            "ts_ms": int(time.time() * 1000),
+            "where": where,
+            "overrides": self.overrides,
+        }
+        row.update(fields)
+        try:
+            with self.telemetry_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+
 # -------------------------------------------------------------------
 # CLI
 # -------------------------------------------------------------------
@@ -210,6 +278,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--agitprop-personality", default="auto", help="Comma-separated modes or auto/all (POSTER, DECREE, COLLAPSE, PRESS BRIEFING FROM HELL, ADMINISTRATIVE CHANT, FALSE PATRIOTIC, GHOST BUREAU, PUBLIC INTEREST FEVER).")
     p.add_argument("--max-words-slogan", type=int, default=11)
     p.add_argument("--export-debug-summary", action="store_true", help="Write run_summary.txt.")
+    p.add_argument("--live-control-file", default="", help="Optional JSON control file for live parameter overrides.")
+    p.add_argument("--live-control-poll-ms", type=int, default=250, help="Poll interval for live control file updates.")
+    p.add_argument("--live-telemetry-jsonl", default="", help="Optional JSONL file for live control telemetry.")
 
     return p.parse_args()
 
@@ -230,6 +301,8 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--max-words-slogan must be >= 1")
     if args.agitprop_count < 1 or args.broadcast_count < 1 or args.chant_count < 1:
         raise SystemExit("--agitprop-count, --broadcast-count, and --chant-count must be >= 1")
+    if args.live_control_poll_ms < 30:
+        raise SystemExit("--live-control-poll-ms must be >= 30")
 
     args.min_frag = max(0.01, args.min_frag)
     args.max_frag = max(args.min_frag, args.max_frag)
@@ -410,6 +483,29 @@ def parse_agitprop_personalities(raw: str) -> List[str]:
     canonical = {k.upper(): k for k in AGITPROP_MODE_PROFILES}
     selected = [canonical[name] for name in requested if name in canonical]
     return selected or list(AGITPROP_MODE_PROFILES.keys())
+
+
+def build_live_control(args: argparse.Namespace) -> LiveControlState:
+    control_file = Path(args.live_control_file).expanduser().resolve() if args.live_control_file else None
+    telemetry_path = Path(args.live_telemetry_jsonl).expanduser().resolve() if args.live_telemetry_jsonl else None
+    return LiveControlState(
+        enabled=bool(control_file),
+        control_file=control_file,
+        poll_ms=max(30, int(args.live_control_poll_ms)),
+        telemetry_path=telemetry_path,
+    )
+
+
+def apply_live_overrides(args: argparse.Namespace, live: Optional[LiveControlState]) -> None:
+    if not live or not live.enabled:
+        return
+    args.absurd_seriousness = live.value(args, "absurd_seriousness")
+    args.text_chaos = live.value(args, "text_chaos")
+    args.rupture_prob = live.value(args, "rupture_prob")
+    args.stutter_prob = live.value(args, "stutter_prob")
+    args.recurrence_prob = live.value(args, "recurrence_prob")
+    args.ghost_prob = live.value(args, "ghost_prob")
+    args.silence_prob = live.value(args, "silence_prob")
 
 
 def resolve_personality(args: argparse.Namespace) -> str:
@@ -877,7 +973,7 @@ def build_chant_cell(top300: List[Line], full: List[Line], args: argparse.Namesp
     }
 
 
-def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary) -> Path:
+def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary, live: Optional[LiveControlState] = None) -> Path:
     top300_path, full_path = Path(args.top300_csv).expanduser().resolve(), Path(args.full_csv).expanduser().resolve()
     if not top300_path.exists() or not full_path.exists():
         raise SystemExit("Missing --top300-csv or --full-csv input file.")
@@ -896,9 +992,30 @@ def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunS
     agit_out = output_root / "agitprop"
     agit_out.mkdir(parents=True, exist_ok=True)
 
-    slogans = [build_slogan(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.agitprop_count))]
-    broadcasts = [build_broadcast(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.broadcast_count))]
-    chant_cells = [build_chant_cell(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.chant_count))]
+    slogans: List[str] = []
+    for _ in range(max(1, args.agitprop_count)):
+        apply_live_overrides(args, live)
+        slogans.append(build_slogan(top300, full, args, resolve_personality(args)))
+
+    broadcasts: List[str] = []
+    for _ in range(max(1, args.broadcast_count)):
+        apply_live_overrides(args, live)
+        broadcasts.append(build_broadcast(top300, full, args, resolve_personality(args)))
+
+    chant_cells: List[Dict[str, str]] = []
+    for _ in range(max(1, args.chant_count)):
+        apply_live_overrides(args, live)
+        chant_cells.append(build_chant_cell(top300, full, args, resolve_personality(args)))
+
+    if live and live.enabled:
+        live.telemetry(
+            "agitprop_mode",
+            slogans=len(slogans),
+            broadcasts=len(broadcasts),
+            chants=len(chant_cells),
+            absurd_seriousness=args.absurd_seriousness,
+            text_chaos=args.text_chaos,
+        )
 
     (agit_out / "slogans.txt").write_text("\n\n".join(s.strip() for s in slogans) + "\n", encoding="utf-8")
     (agit_out / "broadcasts.txt").write_text("\n\n".join(s.strip() for s in broadcasts) + "\n", encoding="utf-8")
@@ -1309,7 +1426,7 @@ def build_section_score(events: List[Event]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
+def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int, live: Optional[LiveControlState] = None) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     ghosts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -1338,6 +1455,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         return any(a <= position_ms <= b for a, b in dead_air_windows)
 
     for i in range(n_events):
+        apply_live_overrides(args, live)
         progress = i / max(1, n_events - 1)
         profile = section_profile(progress, args) if args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": args.silence_prob, "ghost": args.ghost_prob}
 
@@ -1466,6 +1584,18 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             )
         )
 
+        if live and live.enabled and (i == 0 or i == n_events - 1 or i % 20 == 0):
+            live.telemetry(
+                "audio_event",
+                idx=i,
+                n_events=n_events,
+                section=sec_name,
+                pos_ms=pos,
+                layer=layer,
+                from_memory=from_memory,
+                recurrence_index=rec_idx,
+            )
+
     return voice_main, voice_cuts, ghosts, events
 
 
@@ -1473,7 +1603,7 @@ def normalize_master(audio: AudioSegment, master_gain: float) -> AudioSegment:
     return compress_dynamic_range(audio, threshold=-22.0, ratio=2.4, attack=8, release=140).apply_gain(master_gain)
 
 
-def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int, args: argparse.Namespace, summary: RunSummary) -> None:
+def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int, args: argparse.Namespace, summary: RunSummary, live: Optional[LiveControlState] = None) -> None:
     total_ms = max(2000, int(max(1.0, args.duration) * 1000))
     min_frag_ms = max(10, int(max(0.01, args.min_frag) * 1000))
     max_frag_ms = max(min_frag_ms, int(max(args.min_frag, args.max_frag) * 1000))
@@ -1483,7 +1613,7 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     stems_dir = variant_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
-    main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms)
+    main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms, live=live)
     hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
 
     master = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -1507,7 +1637,7 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     summary.output_paths.extend([str(master_path), str(event_path), str(score_path)])
 
 
-def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary) -> None:
+def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary, live: Optional[LiveControlState] = None) -> None:
     if not args.input:
         raise SystemExit("--input is required for --mode audio, --mode both, and --mode all")
     input_root = Path(args.input).expanduser().resolve()
@@ -1526,7 +1656,8 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
     audio_out = output_root / "audio_cutups"
     audio_out.mkdir(parents=True, exist_ok=True)
     for i in range(1, max(1, args.variants) + 1):
-        build_variant(samples, audio_out, i, args, summary)
+        apply_live_overrides(args, live)
+        build_variant(samples, audio_out, i, args, summary, live=live)
 
 
 # -------------------------------------------------------------------
@@ -1575,6 +1706,7 @@ def main() -> None:
     args = validate_args(parse_args())
     args.agitprop_personalities = parse_agitprop_personalities(args.agitprop_personality)
     random.seed(args.seed)
+    live = build_live_control(args)
 
     output_root = Path(args.output).expanduser().resolve()
     if output_root.exists() and not output_root.is_dir():
@@ -1586,18 +1718,18 @@ def main() -> None:
     summary = RunSummary()
 
     if args.mode == "audio":
-        run_audio_mode(args, output_root, summary)
+        run_audio_mode(args, output_root, summary, live=live)
     elif args.mode == "agitprop":
-        run_agitprop_mode(args, output_root, summary)
+        run_agitprop_mode(args, output_root, summary, live=live)
     elif args.mode == "cuttargets":
         run_cuttargets_mode(args, output_root, summary)
     elif args.mode == "both":
-        run_agitprop_mode(args, output_root, summary)
-        run_audio_mode(args, output_root, summary)
+        run_agitprop_mode(args, output_root, summary, live=live)
+        run_audio_mode(args, output_root, summary, live=live)
     elif args.mode == "all":
-        chant_path = run_agitprop_mode(args, output_root, summary)
+        chant_path = run_agitprop_mode(args, output_root, summary, live=live)
         run_cuttargets_mode(args, output_root, summary, chant_cells_path=chant_path)
-        run_audio_mode(args, output_root, summary)
+        run_audio_mode(args, output_root, summary, live=live)
 
     print_summary(summary)
     if args.export_debug_summary:

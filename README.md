@@ -174,6 +174,37 @@ python PY/cutup.py \
   --export-debug-summary
 ```
 
+### 11) Live-control MVP via JSON file polling (text + audio)
+
+Create a control file:
+
+```json
+{
+  "absurd_seriousness": 0.92,
+  "text_chaos": 1.1,
+  "rupture_prob": 0.7,
+  "stutter_prob": 0.55,
+  "recurrence_prob": 0.6,
+  "ghost_prob": 0.5,
+  "silence_prob": 0.3
+}
+```
+
+Run with live polling:
+
+```bash
+python PY/cutup.py \
+  --mode both \
+  --input ./samples \
+  --output out/live_mvp \
+  --sectional \
+  --live-control-file ./live_control.json \
+  --live-control-poll-ms 120 \
+  --live-telemetry-jsonl out/live_mvp/live_telemetry.jsonl
+```
+
+Edit `live_control.json` while the run is active. The engine re-reads values at runtime and applies safe clamping.
+
 ---
 
 ## Output structure (typical)
@@ -199,6 +230,34 @@ Inside your `--output` directory you will usually see:
 
 ---
 
+## Live control MVP (runtime overrides)
+
+Live control is file-based in this MVP and is intended as a simple bridge toward OSC/MIDI/WebSocket control.
+
+CLI flags:
+
+- `--live-control-file <path>`: JSON file to poll for overrides.
+- `--live-control-poll-ms <ms>`: poll interval (minimum `30`).
+- `--live-telemetry-jsonl <path>`: append runtime state snapshots/events as JSONL.
+
+Supported live keys in the JSON file:
+
+- `absurd_seriousness` (`0.0..1.0`)
+- `text_chaos` (`0.0..1.5`)
+- `rupture_prob` (`0.0..1.0`)
+- `stutter_prob` (`0.0..1.0`)
+- `recurrence_prob` (`0.0..0.95`)
+- `ghost_prob` (`0.0..0.95`)
+- `silence_prob` (`0.0..0.95`)
+
+Notes:
+
+- Invalid JSON or missing files are ignored (engine continues with current values).
+- Overrides are clamped to safe ranges.
+- Telemetry can be tailed live with: `tail -f out/live_mvp/live_telemetry.jsonl`.
+
+---
+
 ## Troubleshooting
 
 ### `ModuleNotFoundError: No module named 'pydub'`
@@ -212,4 +271,3 @@ python -m pip install pydub
 ### Audio decoding/export issues
 
 Ensure `ffmpeg` is installed and discoverable from your shell PATH.
-
