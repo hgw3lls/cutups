@@ -205,6 +205,32 @@ python PY/cutup.py \
 
 Edit `live_control.json` while the run is active. The engine re-reads values at runtime and applies safe clamping.
 
+### 12) Real-time GUI controller (slider interface)
+
+Start GUI (writes a live control JSON file):
+
+```bash
+python PY/live_control_gui.py --control-file ./live_control.json
+```
+
+Then run the engine using the same file:
+
+```bash
+python PY/cutup.py \
+  --mode both \
+  --input ./samples \
+  --output out/live_gui \
+  --sectional \
+  --live-control-file ./live_control.json \
+  --live-control-poll-ms 120
+```
+
+The GUI provides:
+
+- continuous slider control for all current live-override keys
+- one-click presets (`Default`, `Bureaucratic Pressure`, `Ghost Broadcast`, `Collapse Ritual`)
+- immediate JSON writes compatible with `cutup.py` live polling
+
 ---
 
 ## Output structure (typical)
@@ -255,6 +281,12 @@ Notes:
 - Invalid JSON or missing files are ignored (engine continues with current values).
 - Overrides are clamped to safe ranges.
 - Telemetry can be tailed live with: `tail -f out/live_mvp/live_telemetry.jsonl`.
+
+### GUI helper
+
+- Script: `PY/live_control_gui.py`
+- Uses Python stdlib `tkinter` (no extra package installs needed on most desktop Python setups).
+- Writes the same JSON schema accepted by `--live-control-file`.
 
 ---
 
