@@ -288,6 +288,44 @@ Notes:
 - Uses Python stdlib `tkinter` (no extra package installs needed on most desktop Python setups).
 - Writes the same JSON schema accepted by `--live-control-file`.
 
+### TouchDesigner GUI bridge
+
+You can also drive the live-control system from TouchDesigner using UDP JSON.
+
+1) Start the bridge:
+
+```bash
+python PY/live_control_td_bridge.py \
+  --host 127.0.0.1 \
+  --port 9988 \
+  --control-file ./live_control.json \
+  --verbose
+```
+
+2) Run `cutup.py` using the same control file:
+
+```bash
+python PY/cutup.py \
+  --mode both \
+  --input ./samples \
+  --output out/live_td \
+  --sectional \
+  --live-control-file ./live_control.json \
+  --live-control-poll-ms 120
+```
+
+3) In TouchDesigner, send UDP packets containing JSON objects (from UDP Out DAT/CHOP), for example:
+
+```json
+{"absurd_seriousness":0.9,"recurrence_prob":0.62,"ghost_prob":0.5}
+```
+
+Notes:
+
+- The bridge clamps values to the same ranges as `cutup.py` live control.
+- Partial updates are merged, so you can send only changed keys each frame.
+- Supported keys are identical to the file-based live-control schema.
+
 ---
 
 ## Troubleshooting
