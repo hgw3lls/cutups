@@ -102,16 +102,6 @@ OFFICIAL_NOUNS = [
 PROCEDURAL_FILLERS = ["UNDER", "PURSUANT TO", "IN ACCORDANCE WITH", "SUBJECT TO", "PENDING", "WITHOUT PREJUDICE TO"]
 BANAL_CONNECTORS = ["and also", "for now", "as needed", "until further feeling", "in this weather", "for administrative calm"]
 
-LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
-    "absurd_seriousness": (0.0, 1.0),
-    "text_chaos": (0.0, 1.5),
-    "rupture_prob": (0.0, 1.0),
-    "stutter_prob": (0.0, 1.0),
-    "recurrence_prob": (0.0, 0.95),
-    "ghost_prob": (0.0, 0.95),
-    "silence_prob": (0.0, 0.95),
-}
-
 # -------------------------------------------------------------------
 # DATA MODELS
 # -------------------------------------------------------------------
@@ -537,59 +527,6 @@ def parse_agitprop_personalities(raw: str) -> List[str]:
     canonical = {k.upper(): k for k in AGITPROP_MODE_PROFILES}
     selected = [canonical[name] for name in requested if name in canonical]
     return selected or list(AGITPROP_MODE_PROFILES.keys())
-
-
-def build_live_control(args: argparse.Namespace) -> LiveControlState:
-    control_file = Path(args.live_control_file).expanduser().resolve() if args.live_control_file else None
-    telemetry_path = Path(args.live_telemetry_jsonl).expanduser().resolve() if args.live_telemetry_jsonl else None
-    return LiveControlState(
-        enabled=bool(control_file),
-        control_file=control_file,
-        poll_ms=max(30, int(args.live_control_poll_ms)),
-        telemetry_path=telemetry_path,
-    )
-
-
-def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState]) -> RuntimeParams:
-    if not live or not live.enabled:
-        return RuntimeParams(
-            absurd_seriousness=float(args.absurd_seriousness),
-            text_chaos=float(args.text_chaos),
-            rupture_prob=float(args.rupture_prob),
-            stutter_prob=float(args.stutter_prob),
-            recurrence_prob=float(args.recurrence_prob),
-            ghost_prob=float(args.ghost_prob),
-            silence_prob=float(args.silence_prob),
-            force_section="",
-            hold_section=False,
-            burst_now=False,
-            panic_silence=False,
-        )
-    return RuntimeParams(
-        absurd_seriousness=live.value(args, "absurd_seriousness"),
-        text_chaos=live.value(args, "text_chaos"),
-        rupture_prob=live.value(args, "rupture_prob"),
-        stutter_prob=live.value(args, "stutter_prob"),
-        recurrence_prob=live.value(args, "recurrence_prob"),
-        ghost_prob=live.value(args, "ghost_prob"),
-        silence_prob=live.value(args, "silence_prob"),
-        force_section=live.section_override,
-        hold_section=live.hold_section,
-        burst_now=live.burst_now,
-        panic_silence=live.panic_silence,
-    )
-
-
-def apply_runtime_params(args: argparse.Namespace, runtime: RuntimeParams) -> argparse.Namespace:
-    local = argparse.Namespace(**vars(args))
-    local.absurd_seriousness = runtime.absurd_seriousness
-    local.text_chaos = runtime.text_chaos
-    local.rupture_prob = runtime.rupture_prob
-    local.stutter_prob = runtime.stutter_prob
-    local.recurrence_prob = runtime.recurrence_prob
-    local.ghost_prob = runtime.ghost_prob
-    local.silence_prob = runtime.silence_prob
-    return local
 
 
 def resolve_personality(args: argparse.Namespace) -> str:
@@ -1076,33 +1013,9 @@ def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunS
     agit_out = output_root / "agitprop"
     agit_out.mkdir(parents=True, exist_ok=True)
 
-    slogans: List[str] = []
-    for _ in range(max(1, args.agitprop_count)):
-        runtime = runtime_snapshot(args, live)
-        local_args = apply_runtime_params(args, runtime)
-        slogans.append(build_slogan(top300, full, local_args, resolve_personality(local_args)))
-
-    broadcasts: List[str] = []
-    for _ in range(max(1, args.broadcast_count)):
-        runtime = runtime_snapshot(args, live)
-        local_args = apply_runtime_params(args, runtime)
-        broadcasts.append(build_broadcast(top300, full, local_args, resolve_personality(local_args)))
-
-    chant_cells: List[Dict[str, str]] = []
-    for _ in range(max(1, args.chant_count)):
-        runtime = runtime_snapshot(args, live)
-        local_args = apply_runtime_params(args, runtime)
-        chant_cells.append(build_chant_cell(top300, full, local_args, resolve_personality(local_args)))
-
-    if live and live.enabled:
-        live.telemetry(
-            "agitprop_mode",
-            slogans=len(slogans),
-            broadcasts=len(broadcasts),
-            chants=len(chant_cells),
-            absurd_seriousness=runtime_snapshot(args, live).absurd_seriousness,
-            text_chaos=runtime_snapshot(args, live).text_chaos,
-        )
+    slogans = [build_slogan(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.agitprop_count))]
+    broadcasts = [build_broadcast(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.broadcast_count))]
+    chant_cells = [build_chant_cell(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.chant_count))]
 
     (agit_out / "slogans.txt").write_text("\n\n".join(s.strip() for s in slogans) + "\n", encoding="utf-8")
     (agit_out / "broadcasts.txt").write_text("\n\n".join(s.strip() for s in broadcasts) + "\n", encoding="utf-8")
@@ -1316,17 +1229,6 @@ def section_profile(progress: float, args: argparse.Namespace) -> Dict[str, floa
     return {"name": "AFTERIMAGE", "dens": 0.3, "frag_mul": 0.24, "repeat": 0.78, "reverse": 0.68, "filt": 0.99, "silence": args.silence_prob + 0.33, "ghost": args.ghost_prob + 0.42}
 
 
-def section_profile_from_name(name: str, args: argparse.Namespace) -> Dict[str, float]:
-    probes = {
-        "ENTRY": 0.1,
-        "BUILD": 0.3,
-        "PRESSURE": 0.56,
-        "COLLAPSE": 0.78,
-        "AFTERIMAGE": 0.93,
-    }
-    return section_profile(probes.get(name, 0.3), args)
-
-
 def section_plan(total_ms: int) -> Dict[str, Tuple[int, int]]:
     marks = [0, int(total_ms * 0.2), int(total_ms * 0.45), int(total_ms * 0.68), int(total_ms * 0.86), total_ms]
     names = list(SECTION_NAMES)
@@ -1525,7 +1427,7 @@ def build_section_score(events: List[Event]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int, live: Optional[LiveControlState] = None) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
+def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     ghosts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -1534,7 +1436,6 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
     recurrence_memory: Deque[Tuple[SampleFile, AudioSegment, Dict[str, object], str]] = deque(maxlen=max(3, args.memory_depth * 2))
     recurrence_count: Dict[str, int] = {}
     plan = section_plan(total_ms)
-    held_section = ""
 
     n_events = choose_event_count(total_ms / 1000.0, args.density, args.sectional)
     current_anchor = 0
@@ -1558,20 +1459,11 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
         progress = i / max(1, n_events - 1)
-        if runtime.hold_section and runtime.force_section:
-            held_section = runtime.force_section
-        elif not runtime.hold_section:
-            held_section = ""
-        forced_section = runtime.force_section or held_section
-
-        if local_args.sectional:
-            profile = section_profile_from_name(forced_section, local_args) if forced_section else section_profile(progress, local_args)
-        else:
-            profile = {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": local_args.silence_prob, "ghost": local_args.ghost_prob}
+        profile = section_profile(progress, args) if args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": args.silence_prob, "ghost": args.ghost_prob}
 
         sec_name = str(profile["name"])
         sec_span = plan.get(sec_name, (0, total_ms))
-        memory_bias = local_args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
+        memory_bias = args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
         use_recurrence_fragment = bool(recurrence_memory and random.random() < clamp(memory_bias * (1.4 if sec_name in {"PRESSURE", "COLLAPSE"} else 1.0), 0.0, 0.97))
         from_memory = False
         if use_recurrence_fragment:
@@ -1586,10 +1478,10 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             meta = dict(meta)
             meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
         else:
-            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, local_args.concrete)
-            src = AudioSegment.from_file(sample.path).set_frame_rate(local_args.sample_rate).set_channels(2)
+            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, args.concrete)
+            src = AudioSegment.from_file(sample.path).set_frame_rate(args.sample_rate).set_channels(2)
             frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]))
-            shaped, meta = shape_fragment(frag, profile, local_args.concrete)
+            shaped, meta = shape_fragment(frag, profile, args.concrete)
         recurrence_count[str(sample.path)] = recurrence_count.get(str(sample.path), 0) + 1
 
         layer = random.choices(
@@ -1641,14 +1533,13 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 placed = low_pass_filter(placed, random.choice([1600, 2200, 3000]))
             ghosts = ghosts.overlay(placed, position=pos)
 
-        if local_args.sectional and random.random() < (0.18 if sec_name not in {"COLLAPSE", "AFTERIMAGE"} else 0.3) and recurrence_count[str(sample.path)] > 1:
+        if args.sectional and random.random() < (0.18 if sec_name not in {"COLLAPSE", "AFTERIMAGE"} else 0.3) and recurrence_count[str(sample.path)] > 1:
             # ghost return: delayed, filtered recurrence of same material.
             back_pos = min(total_ms - 1, pos + random.randint(160, 2600))
             ghost_copy = low_pass_filter(shaped.reverse(), random.choice([1200, 1800, 2400])).apply_gain(random.uniform(-15, -9))
             ghosts = ghosts.overlay(ghost_copy, position=back_pos)
 
-        burst_gate = 1.0 if runtime.burst_now else 0.2
-        if sec_name in {"PRESSURE", "COLLAPSE"} and random.random() < burst_gate:
+        if sec_name in {"PRESSURE", "COLLAPSE"} and random.random() < 0.2:
             # insistence burst: command cell repeats as abrupt authority punctuation.
             cell_len = min(len(shaped), random.randint(40, 180))
             if cell_len > 20:
