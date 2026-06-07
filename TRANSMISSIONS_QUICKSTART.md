@@ -53,10 +53,34 @@ python3 PY/cutup.py \
   --mode audio \
   --preset spoken-word-cutup \
   --input ./voice/interview.wav \
+  --phrase-length medium \
+  --intelligibility high \
+  --interruption-density low \
+  --silence-insert-ms 120:420 \
   --output out/spoken_word \
   --duration 90 \
   --seed 11
 ```
+
+For more fractured speech, lower intelligibility and increase interruptions:
+
+```bash
+python3 PY/cutup.py \
+  --mode audio \
+  --preset spoken-word-cutup \
+  --input ./voice \
+  --phrase-length short \
+  --intelligibility low \
+  --interruption-density high \
+  --silence-insert-ms 40:180 \
+  --output out/spoken_fragments \
+  --duration 60 \
+  --seed 12
+```
+
+Phrase-length values: `micro`, `short`, `medium`, `long`, `auto`.
+Intelligibility values: `high`, `medium`, `low`, `auto`.
+Interruption-density values: `low`, `medium`, `high`, `auto`.
 
 For generated TRANSMISSIONS text:
 

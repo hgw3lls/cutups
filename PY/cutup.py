@@ -88,6 +88,13 @@ SLICE_GRID_FACTORS: Dict[str, float] = {
     "1/8t": 1.0 / 3.0,
     "1/16t": 1.0 / 6.0,
 }
+PHRASE_LENGTH_RANGES: Dict[str, Tuple[float, float]] = {
+    "auto": (0.0, 0.0),
+    "micro": (0.04, 0.45),
+    "short": (0.20, 1.35),
+    "medium": (0.65, 3.40),
+    "long": (1.60, 6.80),
+}
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_TOP300_CSV = SCRIPT_DIR / "transmissions_top300_sample_candidates.csv"
 DEFAULT_FULL_CSV = SCRIPT_DIR / "transmissions_full_subtitles.csv"
@@ -151,6 +158,10 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "absurd_seriousness": 0.62,
             "min_frag": 0.45,
             "max_frag": 3.6,
+            "phrase_length": "medium",
+            "intelligibility": "high",
+            "interruption_density": "low",
+            "silence_insert_ms": "120:420",
             "max_words_slogan": 14,
         },
     },
@@ -466,6 +477,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bed-noise", action=argparse.BooleanOptionalAction, default=False, help="Add synthetic hiss bed.")
     p.add_argument("--min-frag", type=float, default=0.05, help="Minimum fragment size in seconds.")
     p.add_argument("--max-frag", type=float, default=4.2, help="Maximum fragment size in seconds.")
+    p.add_argument("--phrase-length", choices=sorted(PHRASE_LENGTH_RANGES), default="auto", help="Voice-oriented fragment length profile.")
+    p.add_argument("--intelligibility", choices=["auto", "high", "medium", "low"], default="auto", help="Voice clarity bias for speed, reverse, grain, and filtering.")
+    p.add_argument("--interruption-density", choices=["auto", "low", "medium", "high"], default="auto", help="How often spoken fragments get cut, gapped, or disrupted.")
+    p.add_argument("--silence-insert-ms", default="", help="Optional silence insertion range as min:max milliseconds.")
     p.add_argument("--density", choices=["sparse", "medium", "dense"], default="medium")
     p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
@@ -536,9 +551,22 @@ def apply_preset(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
+def apply_phrase_length(args: argparse.Namespace) -> argparse.Namespace:
+    if args.phrase_length == "auto":
+        return args
+    explicit = getattr(args, "_explicit_args", set())
+    min_s, max_s = PHRASE_LENGTH_RANGES[args.phrase_length]
+    if "min_frag" not in explicit:
+        args.min_frag = min_s
+    if "max_frag" not in explicit:
+        args.max_frag = max_s
+    return args
+
+
 def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     """Validate and normalize CLI arguments with clear failure reasons."""
     apply_preset(args)
+    apply_phrase_length(args)
     if args.variants < 1:
         raise SystemExit("--variants must be >= 1")
     if args.sample_rate < 8000:
@@ -562,6 +590,7 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     if args.live_control_poll_ms < 30:
         raise SystemExit("--live-control-poll-ms must be >= 30")
 
+    args.silence_insert_range_ms = parse_silence_insert_ms(args.silence_insert_ms)
     args.min_frag = max(0.01, args.min_frag)
     args.max_frag = max(args.min_frag, args.max_frag)
     args.silence_prob = clamp(args.silence_prob, 0.0, 0.95)
@@ -687,6 +716,78 @@ def cut_words(text: str) -> List[str]:
     return TOKEN_RE.findall(text)
 
 
+def parse_silence_insert_ms(raw: str) -> Tuple[int, int]:
+    text = str(raw or "").strip().lower()
+    if not text or text == "auto":
+        return (0, 0)
+    match = re.fullmatch(r"(\d+)\s*:\s*(\d+)", text)
+    if not match:
+        raise SystemExit("--silence-insert-ms must be formatted as min:max milliseconds, e.g. 120:420")
+    low, high = int(match.group(1)), int(match.group(2))
+    if low > high:
+        raise SystemExit("--silence-insert-ms min must be <= max")
+    if high > 5000:
+        raise SystemExit("--silence-insert-ms max must be <= 5000")
+    return (low, high)
+
+
+def silence_duration_ms(args: argparse.Namespace, fallback: Tuple[int, int]) -> int:
+    low, high = getattr(args, "silence_insert_range_ms", (0, 0))
+    if high <= 0:
+        low, high = fallback
+    return random.randint(int(low), int(high))
+
+
+def workflow_audio_profile(profile: Dict[str, float], args: argparse.Namespace) -> Dict[str, float]:
+    out = dict(profile)
+    intelligibility = str(getattr(args, "intelligibility", "auto"))
+    if intelligibility == "high":
+        out["reverse"] = float(out.get("reverse", 0.0)) * 0.25
+        out["repeat"] = float(out.get("repeat", 0.0)) * 0.55
+        out["filt"] = float(out.get("filt", 0.0)) * 0.55
+        out["silence"] = float(out.get("silence", 0.0)) * 0.75
+        out["grain_bias"] = 0.22
+        out["swarm_bias"] = 0.35
+        out["speed_mode"] = "clear"
+    elif intelligibility == "medium":
+        out["reverse"] = float(out.get("reverse", 0.0)) * 0.75
+        out["repeat"] = float(out.get("repeat", 0.0)) * 0.85
+        out["filt"] = float(out.get("filt", 0.0)) * 0.85
+        out["grain_bias"] = 0.65
+        out["swarm_bias"] = 0.75
+        out["speed_mode"] = "moderate"
+    elif intelligibility == "low":
+        out["reverse"] = float(out.get("reverse", 0.0)) * 1.25
+        out["repeat"] = float(out.get("repeat", 0.0)) * 1.15
+        out["filt"] = float(out.get("filt", 0.0)) * 1.1
+        out["silence"] = float(out.get("silence", 0.0)) * 1.1
+        out["grain_bias"] = 1.25
+        out["swarm_bias"] = 1.2
+        out["speed_mode"] = "unstable"
+
+    concrete = bool(getattr(args, "concrete", False))
+    hard_cut = 0.22 if concrete else 0.14
+    interruption_density = str(getattr(args, "interruption_density", "auto"))
+    if interruption_density == "low":
+        hard_cut *= 0.35
+        out["repeat"] = float(out.get("repeat", 0.0)) * 0.65
+        out["silence"] = float(out.get("silence", 0.0)) * 0.7
+        out["swarm_bias"] = float(out.get("swarm_bias", 1.0)) * 0.5
+    elif interruption_density == "medium":
+        hard_cut *= 0.8
+    elif interruption_density == "high":
+        hard_cut *= 1.65
+        out["repeat"] = float(out.get("repeat", 0.0)) * 1.2
+        out["silence"] = float(out.get("silence", 0.0)) + 0.08
+        out["swarm_bias"] = float(out.get("swarm_bias", 1.0)) * 1.3
+
+    out["hard_cut"] = clamp(hard_cut, 0.0, 0.75)
+    for key in ("reverse", "repeat", "filt", "silence", "ghost"):
+        if key in out:
+            out[key] = clamp(float(out[key]), 0.0, 0.99)
+    return out
+
+
 def beat_grid_ms(args: argparse.Namespace) -> int:
     bpm = float(getattr(args, "bpm", 0.0) or 0.0)
     grid = str(getattr(args, "slice_grid", "off") or "off")
@@ -766,6 +867,10 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"concrete: {args.concrete}")
     print(f"bed_noise: {args.bed_noise}")
     print(f"fragments: {args.min_frag:.3f}s..{args.max_frag:.3f}s")
+    print(f"phrase_length: {args.phrase_length}")
+    print(f"intelligibility: {args.intelligibility}")
+    print(f"interruption_density: {args.interruption_density}")
+    print(f"silence_insert_ms: {args.silence_insert_ms or 'auto'}")
     grid_ms = beat_grid_ms(args)
     if grid_ms > 0:
         print(f"beat_grid: {args.bpm:g} bpm {args.slice_grid} ({grid_ms} ms)")
@@ -1613,7 +1718,8 @@ def clamp_to_section(position_ms: int, span: Tuple[int, int], frag_len: int, gri
 
 
 def command_cell_swarm(audio: AudioSegment, profile: Dict[str, float]) -> Tuple[AudioSegment, bool]:
-    if len(audio) < 45 or random.random() > (0.18 + profile["repeat"] * 0.42):
+    swarm_prob = clamp((0.18 + profile["repeat"] * 0.42) * float(profile.get("swarm_bias", 1.0)), 0.0, 0.9)
+    if len(audio) < 45 or random.random() > swarm_prob:
         return audio, False
     cell_len = random.randint(35, min(240, len(audio)))
     start = random.randint(0, max(0, len(audio) - cell_len))
@@ -1701,15 +1807,25 @@ def grainify(audio: AudioSegment) -> AudioSegment:
     return out
 
 
-def shape_fragment(audio: AudioSegment, profile: Dict[str, float], concrete: bool) -> Tuple[AudioSegment, Dict[str, object]]:
+def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argparse.Namespace) -> Tuple[AudioSegment, Dict[str, object]]:
+    concrete = bool(getattr(args, "concrete", False))
     reversed_flag = random.random() < profile["reverse"]
     if reversed_flag:
         audio = audio.reverse()
 
-    speed = random.choice([0.58, 0.72, 0.85, 0.94, 1.0, 1.12, 1.28, 1.45]) if concrete else random.choice([0.76, 0.86, 0.94, 1.0, 1.1, 1.22])
+    speed_mode = str(profile.get("speed_mode", "auto"))
+    if speed_mode == "clear":
+        speed = random.choice([0.94, 1.0, 1.0, 1.04])
+    elif speed_mode == "moderate":
+        speed = random.choice([0.86, 0.94, 1.0, 1.0, 1.12])
+    elif speed_mode == "unstable":
+        speed = random.choice([0.58, 0.72, 0.85, 0.94, 1.0, 1.18, 1.35, 1.45])
+    else:
+        speed = random.choice([0.58, 0.72, 0.85, 0.94, 1.0, 1.12, 1.28, 1.45]) if concrete else random.choice([0.76, 0.86, 0.94, 1.0, 1.1, 1.22])
     audio = change_speed(audio, speed)
 
-    grain_mode = random.random() < (0.42 if concrete else 0.22)
+    grain_prob = (0.42 if concrete else 0.22) * float(profile.get("grain_bias", 1.0))
+    grain_mode = random.random() < clamp(grain_prob, 0.0, 0.9)
     if grain_mode:
         audio = grainify(audio)
 
@@ -1727,11 +1843,11 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], concrete: boo
     if swarm_mode:
         repeated = max(repeated, 3)
 
-    if random.random() < (0.22 if concrete else 0.14):
+    if random.random() < float(profile.get("hard_cut", 0.22 if concrete else 0.14)):
         # hard interruption: chop center out to create phrase discontinuity.
         mid = len(audio) // 2
         cut = random.randint(8, min(120, max(8, len(audio) // 2)))
-        audio = audio[: max(0, mid - cut)] + AudioSegment.silent(duration=random.randint(12, 80), frame_rate=audio.frame_rate) + audio[min(len(audio), mid + cut) :]
+        audio = audio[: max(0, mid - cut)] + AudioSegment.silent(duration=silence_duration_ms(args, (12, 80)), frame_rate=audio.frame_rate) + audio[min(len(audio), mid + cut) :]
 
     hp = random.choice([100, 180, 260, 420, 700, 1200, 1700])
     lp = random.choice([1200, 2100, 3200, 4400, 6200, 9000])
@@ -1741,12 +1857,12 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], concrete: boo
         audio = low_pass_filter(audio, lp)
 
     if random.random() < profile["silence"]:
-        pad = AudioSegment.silent(duration=random.randint(18, 160), frame_rate=audio.frame_rate)
+        pad = AudioSegment.silent(duration=silence_duration_ms(args, (18, 160)), frame_rate=audio.frame_rate)
         audio = (pad + audio) if random.random() < 0.5 else (audio + pad)
 
     if random.random() < profile["silence"] * 0.45 and len(audio) > 70:
         hole_start = random.randint(0, max(0, len(audio) - 40))
-        hole = AudioSegment.silent(duration=random.randint(10, 70), frame_rate=audio.frame_rate)
+        hole = AudioSegment.silent(duration=silence_duration_ms(args, (10, 70)), frame_rate=audio.frame_rate)
         audio = audio[:hole_start] + hole + audio[hole_start:]
 
     audio = audio.fade_in(min(20, max(2, len(audio) // 15))).fade_out(min(46, max(5, len(audio) // 9)))
@@ -1845,6 +1961,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         if runtime.force_section and (runtime.hold_section or runtime.burst_now):
             profile = section_profile(SECTION_PROGRESS[runtime.force_section], local_args)
             profile["name"] = runtime.force_section
+        profile = workflow_audio_profile(profile, local_args)
 
         sec_name = str(profile["name"])
         sec_span = plan.get(sec_name, (0, total_ms))
@@ -1866,7 +1983,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, local_args.concrete)
             src = AudioSegment.from_file(sample.path).set_frame_rate(local_args.sample_rate).set_channels(2)
             frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]), grid_ms=grid_ms)
-            shaped, meta = shape_fragment(frag, profile, local_args.concrete)
+            shaped, meta = shape_fragment(frag, profile, local_args)
             if grid_ms > 0:
                 meta = dict(meta)
                 meta["transformation"] = f"{meta.get('transformation', 'slice')}+grid"

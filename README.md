@@ -73,6 +73,12 @@ Beat-oriented cutups can use manual grid slicing:
 python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --output out/beat_demo
 ```
 
+Spoken-word cutups can bias toward intelligibility or rupture:
+
+```bash
+python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --phrase-length medium --intelligibility high --interruption-density low --silence-insert-ms 120:420 --output out/spoken_demo
+```
+
 ---
 
 ## Command-line examples (broad coverage)

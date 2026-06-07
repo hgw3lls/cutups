@@ -72,6 +72,50 @@ class LiveControlTests(unittest.TestCase):
         cutup.apply_preset(args)
         self.assertEqual(args.slice_grid, "1/16")
 
+    def test_spoken_word_preset_sets_voice_controls(self) -> None:
+        args = types.SimpleNamespace(
+            preset="spoken-word-cutup",
+            _explicit_args=set(),
+            phrase_length="auto",
+            intelligibility="auto",
+            interruption_density="auto",
+            silence_insert_ms="",
+        )
+        cutup.apply_preset(args)
+        self.assertEqual(args.phrase_length, "medium")
+        self.assertEqual(args.intelligibility, "high")
+        self.assertEqual(args.interruption_density, "low")
+        self.assertEqual(args.silence_insert_ms, "120:420")
+
+    def test_apply_phrase_length_respects_explicit_fragment_bounds(self) -> None:
+        args = types.SimpleNamespace(
+            phrase_length="long",
+            _explicit_args={"min_frag"},
+            min_frag=0.9,
+            max_frag=1.2,
+        )
+        cutup.apply_phrase_length(args)
+        self.assertEqual(args.min_frag, 0.9)
+        self.assertEqual(args.max_frag, 6.8)
+
+    def test_parse_silence_insert_ms(self) -> None:
+        self.assertEqual(cutup.parse_silence_insert_ms("120:420"), (120, 420))
+        self.assertEqual(cutup.parse_silence_insert_ms(""), (0, 0))
+
+    def test_parse_silence_insert_ms_rejects_bad_range(self) -> None:
+        with self.assertRaises(SystemExit):
+            cutup.parse_silence_insert_ms("420:120")
+
+    def test_workflow_audio_profile_high_intelligibility_reduces_disruption(self) -> None:
+        profile = {"reverse": 0.4, "repeat": 0.6, "filt": 0.8, "silence": 0.3, "ghost": 0.2}
+        args = types.SimpleNamespace(intelligibility="high", interruption_density="low", concrete=False)
+        out = cutup.workflow_audio_profile(profile, args)
+        self.assertLess(out["reverse"], profile["reverse"])
+        self.assertLess(out["repeat"], profile["repeat"])
+        self.assertLess(out["filt"], profile["filt"])
+        self.assertLess(out["hard_cut"], 0.14)
+        self.assertLess(out["swarm_bias"], 1.0)
+
     def test_beat_grid_ms_uses_manual_bpm_and_grid(self) -> None:
         args = types.SimpleNamespace(bpm=120.0, slice_grid="1/16")
         self.assertEqual(cutup.beat_grid_ms(args), 125)
