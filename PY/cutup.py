@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 AudioSegment: Any = None
+WhiteNoise: Any = None
 compress_dynamic_range: Any = None
 high_pass_filter: Any = None
 low_pass_filter: Any = None
@@ -38,7 +39,7 @@ low_pass_filter: Any = None
 
 def ensure_audio_backend() -> None:
     """Load pydub lazily so non-audio flows and --help work without it."""
-    global AudioSegment, compress_dynamic_range, high_pass_filter, low_pass_filter
+    global AudioSegment, WhiteNoise, compress_dynamic_range, high_pass_filter, low_pass_filter
     if AudioSegment is not None:
         return
     if "pydub" not in sys.modules and importlib.util.find_spec("pydub") is None:
@@ -53,6 +54,7 @@ def ensure_audio_backend() -> None:
     try:
         pydub = importlib.import_module("pydub")
         effects = importlib.import_module("pydub.effects")
+        generators = importlib.import_module("pydub.generators")
     except ModuleNotFoundError as exc:
         if exc.name in {"audioop", "pyaudioop"}:
             raise SystemExit(
@@ -61,6 +63,7 @@ def ensure_audio_backend() -> None:
             ) from exc
         raise
     AudioSegment = pydub.AudioSegment
+    WhiteNoise = generators.WhiteNoise
     compress_dynamic_range = effects.compress_dynamic_range
     high_pass_filter = effects.high_pass_filter
     low_pass_filter = effects.low_pass_filter
@@ -139,6 +142,10 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "absurd_seriousness": 0.78,
             "min_frag": 0.025,
             "max_frag": 0.75,
+            "burst_rate": 0.58,
+            "dropout_rate": 0.64,
+            "reverse_shard_rate": 0.46,
+            "filter_severity": "hard",
         },
     },
     "spoken-word-cutup": {
@@ -200,6 +207,9 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "min_frag": 0.06,
             "max_frag": 1.2,
             "master_gain": -4.0,
+            "burst_rate": 0.24,
+            "dropout_rate": 0.28,
+            "filter_severity": "hard",
         },
     },
     "hard-stutter": {
@@ -217,6 +227,8 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "stutter_prob": 0.9,
             "min_frag": 0.025,
             "max_frag": 0.4,
+            "dropout_rate": 0.42,
+            "reverse_shard_rate": 0.24,
         },
     },
     "ghost-transmission": {
@@ -481,6 +493,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--intelligibility", choices=["auto", "high", "medium", "low"], default="auto", help="Voice clarity bias for speed, reverse, grain, and filtering.")
     p.add_argument("--interruption-density", choices=["auto", "low", "medium", "high"], default="auto", help="How often spoken fragments get cut, gapped, or disrupted.")
     p.add_argument("--silence-insert-ms", default="", help="Optional silence insertion range as min:max milliseconds.")
+    p.add_argument("--burst-rate", type=float, default=0.0, help="Probability of inserting static/noise bursts into shaped fragments.")
+    p.add_argument("--dropout-rate", type=float, default=0.0, help="Probability of hard signal dropouts inside shaped fragments.")
+    p.add_argument("--reverse-shard-rate", type=float, default=0.0, help="Probability of reversing tiny shards inside shaped fragments.")
+    p.add_argument("--filter-severity", choices=["auto", "light", "medium", "hard"], default="auto", help="Transmission filter severity for shaped fragments.")
     p.add_argument("--density", choices=["sparse", "medium", "dense"], default="medium")
     p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
@@ -598,6 +614,9 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     args.rupture_prob = clamp(args.rupture_prob, 0.0, 1.0)
     args.stutter_prob = clamp(args.stutter_prob, 0.0, 1.0)
     args.ghost_prob = clamp(args.ghost_prob, 0.0, 0.95)
+    args.burst_rate = clamp(args.burst_rate, 0.0, 1.0)
+    args.dropout_rate = clamp(args.dropout_rate, 0.0, 1.0)
+    args.reverse_shard_rate = clamp(args.reverse_shard_rate, 0.0, 1.0)
     args.text_chaos = clamp(args.text_chaos, 0.0, 1.5)
     args.absurd_seriousness = clamp(args.absurd_seriousness, 0.0, 1.0)
     return args
@@ -871,6 +890,10 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"intelligibility: {args.intelligibility}")
     print(f"interruption_density: {args.interruption_density}")
     print(f"silence_insert_ms: {args.silence_insert_ms or 'auto'}")
+    print(f"burst_rate: {args.burst_rate:.2f}")
+    print(f"dropout_rate: {args.dropout_rate:.2f}")
+    print(f"reverse_shard_rate: {args.reverse_shard_rate:.2f}")
+    print(f"filter_severity: {args.filter_severity}")
     grid_ms = beat_grid_ms(args)
     if grid_ms > 0:
         print(f"beat_grid: {args.bpm:g} bpm {args.slice_grid} ({grid_ms} ms)")
@@ -1786,6 +1809,75 @@ def make_hiss(duration_ms: int, frame_rate: int) -> AudioSegment:
     return low_pass_filter(high_pass_filter(bed, 4200), 10800) - 12
 
 
+def make_noise_burst(duration_ms: int, frame_rate: int, channels: int) -> AudioSegment:
+    burst = WhiteNoise().to_audio_segment(duration=max(4, duration_ms)).set_frame_rate(frame_rate).set_channels(channels)
+    burst = high_pass_filter(burst, random.choice([1800, 2600, 4200, 6200]))
+    burst = low_pass_filter(burst, random.choice([5200, 7600, 10400]))
+    return burst.fade_in(1).fade_out(min(12, max(2, len(burst) // 3)))
+
+
+def reverse_shards(audio: AudioSegment, rate: float) -> Tuple[AudioSegment, bool]:
+    if len(audio) < 50 or rate <= 0 or random.random() >= rate:
+        return audio, False
+    shard_ms = random.randint(18, min(140, max(18, len(audio) // 2)))
+    cursor = 0
+    out = AudioSegment.silent(duration=0, frame_rate=audio.frame_rate)
+    changed = False
+    while cursor < len(audio):
+        part = audio[cursor : min(len(audio), cursor + shard_ms)]
+        if len(part) > 8 and random.random() < clamp(0.25 + rate * 0.55, 0.0, 0.9):
+            part = part.reverse()
+            changed = True
+        out += part
+        cursor += shard_ms
+    return out, changed
+
+
+def apply_dropouts(audio: AudioSegment, args: argparse.Namespace) -> Tuple[AudioSegment, bool]:
+    rate = float(getattr(args, "dropout_rate", 0.0))
+    if len(audio) < 60 or rate <= 0 or random.random() >= rate:
+        return audio, False
+    holes = random.randint(1, max(1, 1 + int(rate * 4)))
+    changed = False
+    for _ in range(holes):
+        if len(audio) < 40:
+            break
+        start = random.randint(0, max(0, len(audio) - 24))
+        dur = min(len(audio) - start, silence_duration_ms(args, (12, 110)))
+        if dur <= 0:
+            continue
+        audio = audio[:start] + AudioSegment.silent(duration=dur, frame_rate=audio.frame_rate) + audio[start + dur :]
+        changed = True
+    return audio, changed
+
+
+def apply_noise_bursts(audio: AudioSegment, args: argparse.Namespace) -> Tuple[AudioSegment, bool]:
+    rate = float(getattr(args, "burst_rate", 0.0))
+    if len(audio) < 30 or rate <= 0 or random.random() >= rate:
+        return audio, False
+    bursts = random.randint(1, max(1, 1 + int(rate * 3)))
+    changed = False
+    for _ in range(bursts):
+        dur = random.randint(8, max(9, min(90, len(audio) // 2)))
+        pos = random.randint(0, max(0, len(audio) - dur))
+        gain = random.uniform(-18.0, -4.0 + rate * 4.0)
+        burst = make_noise_burst(dur, audio.frame_rate, audio.channels).apply_gain(gain)
+        audio = audio.overlay(burst, position=pos)
+        changed = True
+    return audio, changed
+
+
+def filter_pair(args: argparse.Namespace) -> Tuple[int, int]:
+    severity = str(getattr(args, "filter_severity", "auto"))
+    if severity == "light":
+        return random.choice([80, 120, 180, 260]), random.choice([4400, 6200, 9000, 12000])
+    if severity == "medium":
+        return random.choice([180, 260, 420, 700, 1000]), random.choice([2100, 3200, 4400, 6200])
+    if severity == "hard":
+        return random.choice([420, 700, 1200, 1700, 2400]), random.choice([900, 1200, 1800, 2400, 3200])
+    return random.choice([100, 180, 260, 420, 700, 1200, 1700]), random.choice([1200, 2100, 3200, 4400, 6200, 9000])
+
+
 def grainify(audio: AudioSegment) -> AudioSegment:
     if len(audio) < 25:
         return audio
@@ -1829,6 +1921,9 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
     if grain_mode:
         audio = grainify(audio)
 
+    shard_mode = False
+    audio, shard_mode = reverse_shards(audio, float(getattr(args, "reverse_shard_rate", 0.0)))
+
     repeated = 1
     if random.random() < profile["repeat"]:
         repeated = random.choice([2, 3, 4, 5])
@@ -1849,8 +1944,13 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
         cut = random.randint(8, min(120, max(8, len(audio) // 2)))
         audio = audio[: max(0, mid - cut)] + AudioSegment.silent(duration=silence_duration_ms(args, (12, 80)), frame_rate=audio.frame_rate) + audio[min(len(audio), mid + cut) :]
 
-    hp = random.choice([100, 180, 260, 420, 700, 1200, 1700])
-    lp = random.choice([1200, 2100, 3200, 4400, 6200, 9000])
+    dropout_mode = False
+    audio, dropout_mode = apply_dropouts(audio, args)
+
+    burst_mode = False
+    audio, burst_mode = apply_noise_bursts(audio, args)
+
+    hp, lp = filter_pair(args)
     if random.random() < profile["filt"]:
         audio = high_pass_filter(audio, hp)
     if random.random() < profile["filt"]:
@@ -1869,8 +1969,14 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
     transform = "grain" if grain_mode else "slice"
     if reversed_flag:
         transform += "+rev"
+    if shard_mode:
+        transform += "+shards"
     if swarm_mode:
         transform += "+swarm"
+    if dropout_mode:
+        transform += "+dropout"
+    if burst_mode:
+        transform += "+burst"
     return audio, {"reversed": reversed_flag, "speed": speed, "repeated": repeated, "hp_hz": hp, "lp_hz": lp, "grain_mode": grain_mode, "transformation": transform}
 
 

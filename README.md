@@ -79,6 +79,12 @@ Spoken-word cutups can bias toward intelligibility or rupture:
 python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --phrase-length medium --intelligibility high --interruption-density low --silence-insert-ms 120:420 --output out/spoken_demo
 ```
 
+Signal-breach renders can push explicit transmission damage:
+
+```bash
+python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --burst-rate 0.7 --dropout-rate 0.6 --reverse-shard-rate 0.45 --filter-severity hard --output out/breach_demo
+```
+
 ---
 
 ## Command-line examples (broad coverage)

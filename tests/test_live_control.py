@@ -87,6 +87,32 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(args.interruption_density, "low")
         self.assertEqual(args.silence_insert_ms, "120:420")
 
+    def test_signal_breach_preset_sets_breach_controls(self) -> None:
+        args = types.SimpleNamespace(
+            preset="signal-breach",
+            _explicit_args=set(),
+            burst_rate=0.0,
+            dropout_rate=0.0,
+            reverse_shard_rate=0.0,
+            filter_severity="auto",
+        )
+        cutup.apply_preset(args)
+        self.assertEqual(args.burst_rate, 0.58)
+        self.assertEqual(args.dropout_rate, 0.64)
+        self.assertEqual(args.reverse_shard_rate, 0.46)
+        self.assertEqual(args.filter_severity, "hard")
+
+    def test_filter_pair_hard_is_narrower_than_light(self) -> None:
+        hard_args = types.SimpleNamespace(filter_severity="hard")
+        light_args = types.SimpleNamespace(filter_severity="light")
+        for _ in range(20):
+            hard_hp, hard_lp = cutup.filter_pair(hard_args)
+            light_hp, light_lp = cutup.filter_pair(light_args)
+            self.assertGreaterEqual(hard_hp, 420)
+            self.assertLessEqual(hard_lp, 3200)
+            self.assertLessEqual(light_hp, 260)
+            self.assertGreaterEqual(light_lp, 4400)
+
     def test_apply_phrase_length_respects_explicit_fragment_bounds(self) -> None:
         args = types.SimpleNamespace(
             phrase_length="long",

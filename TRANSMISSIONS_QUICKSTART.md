@@ -28,10 +28,21 @@ python3 PY/cutup.py \
   --mode audio \
   --preset signal-breach \
   --input ./samples \
+  --burst-rate 0.7 \
+  --dropout-rate 0.6 \
+  --reverse-shard-rate 0.45 \
+  --filter-severity hard \
   --output out/signal_breach \
   --duration 60 \
   --seed 7
 ```
+
+Signal-breach controls:
+
+- `--burst-rate 0..1`: inserts static/noise bursts into fragments.
+- `--dropout-rate 0..1`: cuts hard dead-air holes into fragments.
+- `--reverse-shard-rate 0..1`: reverses tiny shards inside fragments.
+- `--filter-severity light|medium|hard|auto`: narrows or loosens the transmission-band filtering.
 
 For a short setup check without rendering:
 
