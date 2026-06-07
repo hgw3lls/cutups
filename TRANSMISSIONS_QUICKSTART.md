@@ -5,9 +5,10 @@
 ```bash
 python3 -m pip install -r requirements.txt
 ffmpeg -version
+python3 PY/cutup.py --doctor
 ```
 
-If `ffmpeg` is missing, install it with your system package manager before using audio modes.
+If `ffmpeg` is missing, install it with your system package manager before using audio modes. `--doctor` reports Python, `pydub`, `ffmpeg`/`avconv`, bundled CSVs, and preset availability.
 
 ## Presets
 

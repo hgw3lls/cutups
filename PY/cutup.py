@@ -20,6 +20,7 @@ import csv
 import importlib
 import importlib.util
 import json
+import platform
 import random
 import re
 import shutil
@@ -521,6 +522,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=7, help="Deterministic random seed.")
     p.add_argument("--preset", choices=sorted(PRESET_VALUES), default="", help="Named TRANSMISSIONS recipe.")
     p.add_argument("--list-presets", action="store_true", help="Print available TRANSMISSIONS presets and exit.")
+    p.add_argument("--doctor", action="store_true", help="Check local Python/audio dependencies and bundled data, then exit.")
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
@@ -581,6 +583,9 @@ def parse_args() -> argparse.Namespace:
     if parsed.list_presets:
         print_presets()
         raise SystemExit(0)
+    if parsed.doctor:
+        print_doctor()
+        raise SystemExit(0)
     return parsed
 
 
@@ -604,6 +609,58 @@ def print_presets() -> None:
     print("TRANSMISSIONS presets:")
     for name in sorted(PRESET_VALUES):
         print(f"  {name}: {PRESET_VALUES[name]['description']}")
+
+
+def format_check(ok: bool, detail: str) -> str:
+    return f"{'ok' if ok else 'missing'} - {detail}"
+
+
+def module_status(module_name: str) -> Tuple[bool, str]:
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ValueError:
+        spec = None
+    if spec is None:
+        return False, module_name
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        return False, f"{module_name} import failed: {exc}"
+    version = getattr(module, "__version__", "")
+    return True, f"{module_name}{f' {version}' if version else ''}"
+
+
+def print_doctor() -> None:
+    print("CUTUP DOCTOR")
+    print(f"python: {platform.python_version()} ({sys.executable})")
+
+    checks: List[Tuple[str, bool, str]] = []
+    py_ok = sys.version_info >= (3, 10)
+    checks.append(("python>=3.10", py_ok, f"{platform.python_version()}"))
+
+    pydub_ok, pydub_detail = module_status("pydub")
+    checks.append(("pydub", pydub_ok, pydub_detail))
+
+    audioop_ok = bool(importlib.util.find_spec("audioop") or importlib.util.find_spec("pyaudioop"))
+    if sys.version_info >= (3, 13):
+        checks.append(("audioop-lts", audioop_ok, "audioop/pyaudioop compatibility module for Python 3.13+"))
+
+    ffmpeg_path = shutil.which("ffmpeg") or shutil.which("avconv")
+    checks.append(("ffmpeg/avconv", bool(ffmpeg_path), ffmpeg_path or "install ffmpeg before audio rendering"))
+
+    checks.append(("top300 csv", DEFAULT_TOP300_CSV.exists(), str(DEFAULT_TOP300_CSV)))
+    checks.append(("full csv", DEFAULT_FULL_CSV.exists(), str(DEFAULT_FULL_CSV)))
+
+    for name, ok, detail in checks:
+        print(f"{name}: {format_check(ok, detail)}")
+
+    presets = ", ".join(sorted(PRESET_VALUES))
+    print(f"presets: {presets}")
+
+    if all(ok for _, ok, _ in checks):
+        print("status: ready")
+    else:
+        print("status: action needed")
 
 
 def apply_preset(args: argparse.Namespace) -> argparse.Namespace:

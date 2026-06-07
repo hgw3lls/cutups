@@ -37,6 +37,10 @@ from PY import live_control_td_bridge as td_bridge  # noqa: E402
 
 
 class LiveControlTests(unittest.TestCase):
+    def test_doctor_format_check(self) -> None:
+        self.assertEqual(cutup.format_check(True, "ready"), "ok - ready")
+        self.assertEqual(cutup.format_check(False, "missing thing"), "missing - missing thing")
+
     def test_runtime_snapshot_uses_defaults_when_disabled(self) -> None:
         args = types.SimpleNamespace(
             absurd_seriousness=0.2,

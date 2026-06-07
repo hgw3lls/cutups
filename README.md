@@ -22,6 +22,7 @@ Install Python dependency:
 
 ```bash
 python3 -m pip install -r requirements.txt
+python3 PY/cutup.py --doctor
 ```
 
 For tests:
@@ -55,6 +56,12 @@ List TRANSMISSIONS presets:
 
 ```bash
 python3 PY/cutup.py --list-presets
+```
+
+Check local dependencies:
+
+```bash
+python3 PY/cutup.py --doctor
 ```
 
 Check a render setup without writing audio:
@@ -434,6 +441,12 @@ Notes:
 ---
 
 ## Troubleshooting
+
+Run the environment check first:
+
+```bash
+python3 PY/cutup.py --doctor
+```
 
 ### `ModuleNotFoundError: No module named 'pydub'`
 

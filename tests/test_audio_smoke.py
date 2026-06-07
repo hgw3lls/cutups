@@ -77,6 +77,15 @@ class AudioSmokeTests(unittest.TestCase):
             )
         return result
 
+    def test_doctor_cli_reports_environment(self) -> None:
+        result = self.run_cutup(["--doctor"])
+        self.assertIn("CUTUP DOCTOR", result.stdout)
+        self.assertIn("python>=3.10:", result.stdout)
+        self.assertIn("pydub:", result.stdout)
+        self.assertIn("ffmpeg/avconv:", result.stdout)
+        self.assertIn("presets:", result.stdout)
+        self.assertRegex(result.stdout, r"status: (ready|action needed)")
+
     def test_audio_cli_smoke_writes_master_preview_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
