@@ -44,6 +44,8 @@ Optional future analysis dependencies are kept separate:
 python3 -m pip install -r requirements-analysis.txt
 ```
 
+`python3 PY/cutup.py --doctor` reports those packages under `optional analysis` without making them required for normal `status: ready`.
+
 See [docs/RELATED_TOOLS.md](docs/RELATED_TOOLS.md) for notes on Remixatron, Infinite Remixer, AudioGuide, and why they are references rather than vendored dependencies.
 
 ---

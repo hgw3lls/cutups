@@ -131,6 +131,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
     "beat_dropout_rate": (0.0, 1.0),
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
+OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -630,6 +631,14 @@ def module_status(module_name: str) -> Tuple[bool, str]:
     return True, f"{module_name}{f' {version}' if version else ''}"
 
 
+def optional_analysis_checks() -> List[Tuple[str, bool, str]]:
+    checks = []
+    for label, module_name in OPTIONAL_ANALYSIS_MODULES:
+        ok, detail = module_status(module_name)
+        checks.append((label, ok, detail))
+    return checks
+
+
 def print_doctor() -> None:
     print("CUTUP DOCTOR")
     print(f"python: {platform.python_version()} ({sys.executable})")
@@ -653,6 +662,16 @@ def print_doctor() -> None:
 
     for name, ok, detail in checks:
         print(f"{name}: {format_check(ok, detail)}")
+
+    analysis_checks = optional_analysis_checks()
+    print("optional analysis:")
+    for name, ok, detail in analysis_checks:
+        print(f"  {name}: {format_check(ok, detail)}")
+    if all(ok for _, ok, _ in analysis_checks):
+        print("analysis_status: ready")
+    else:
+        print("analysis_status: optional dependencies not installed")
+        print("analysis_install: python3 -m pip install -r requirements-analysis.txt")
 
     presets = ", ".join(sorted(PRESET_VALUES))
     print(f"presets: {presets}")

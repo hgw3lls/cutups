@@ -44,7 +44,7 @@ Use these projects as references, not embedded dependencies.
 
 ## Proposed Future Work
 
-1. Add optional analysis dependency checks to `--doctor`.
+1. Keep optional analysis dependency checks visible in `--doctor` without making them required for normal rendering.
 2. Add an analysis cache format, likely JSON or CSV, stored outside source-controlled folders by default.
 3. Implement native lightweight beat descriptors:
    - duration

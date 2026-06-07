@@ -83,6 +83,12 @@ class AudioSmokeTests(unittest.TestCase):
         self.assertIn("python>=3.10:", result.stdout)
         self.assertIn("pydub:", result.stdout)
         self.assertIn("ffmpeg/avconv:", result.stdout)
+        self.assertIn("optional analysis:", result.stdout)
+        self.assertIn("librosa:", result.stdout)
+        self.assertIn("scikit-learn:", result.stdout)
+        self.assertRegex(result.stdout, r"analysis_status: (ready|optional dependencies not installed)")
+        if "analysis_status: optional dependencies not installed" in result.stdout:
+            self.assertIn("requirements-analysis.txt", result.stdout)
         self.assertIn("presets:", result.stdout)
         self.assertRegex(result.stdout, r"status: (ready|action needed)")
 

@@ -41,6 +41,12 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(cutup.format_check(True, "ready"), "ok - ready")
         self.assertEqual(cutup.format_check(False, "missing thing"), "missing - missing thing")
 
+    def test_optional_analysis_checks_report_expected_labels(self) -> None:
+        checks = cutup.optional_analysis_checks()
+        self.assertEqual([name for name, _, _ in checks], ["librosa", "scikit-learn"])
+        self.assertTrue(all(isinstance(ok, bool) for _, ok, _ in checks))
+        self.assertTrue(all(detail for _, _, detail in checks))
+
     def test_runtime_snapshot_uses_defaults_when_disabled(self) -> None:
         args = types.SimpleNamespace(
             absurd_seriousness=0.2,
