@@ -193,3 +193,19 @@ python3 PY/cutup.py \
 By default, if the requested output folder already exists and contains files, `cutups` writes to a numbered sibling such as `out/signal_breach_02`. Use `--overwrite` only when you intentionally want to render into an existing non-empty folder.
 
 Use `--preview-duration <seconds>` to write a short `cutup_XX_preview.wav` beside each full master for fast auditioning.
+
+## Validation
+
+Run the full test suite from the repo root:
+
+```bash
+python3 -m pytest
+```
+
+For the audio path specifically:
+
+```bash
+python3 -m pytest tests/test_audio_smoke.py -q
+```
+
+The audio smoke test generates temporary source material, renders through the real CLI, verifies master/preview/event outputs, and checks same-seed determinism. It skips automatically when `pydub` or `ffmpeg` is missing.

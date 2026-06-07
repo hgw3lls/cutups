@@ -28,6 +28,13 @@ For tests:
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+The test suite includes an audio smoke test that generates a temporary WAV source, renders through the real CLI, checks master/preview/event outputs, and verifies same-seed determinism. It skips automatically if `pydub` or `ffmpeg` is unavailable:
+
+```bash
+python3 -m pytest tests/test_audio_smoke.py -q
 ```
 
 ---
