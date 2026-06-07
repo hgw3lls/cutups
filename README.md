@@ -38,6 +38,14 @@ The test suite includes an audio smoke test that generates a temporary WAV sourc
 python3 -m pytest tests/test_audio_smoke.py -q
 ```
 
+Optional future analysis dependencies are kept separate:
+
+```bash
+python3 -m pip install -r requirements-analysis.txt
+```
+
+See [docs/RELATED_TOOLS.md](docs/RELATED_TOOLS.md) for notes on Remixatron, Infinite Remixer, AudioGuide, and why they are references rather than vendored dependencies.
+
 ---
 
 ## Quick start

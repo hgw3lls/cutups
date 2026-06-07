@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Optional future analysis stack for beat similarity and descriptor matching.
+# Not required for normal TRANSMISSIONS rendering.
+librosa>=0.10
+scikit-learn>=1.4
