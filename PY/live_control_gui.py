@@ -28,6 +28,10 @@ RANGES: Dict[str, Tuple[float, float, float]] = {
     "burst_rate": (0.0, 1.0, 0.0),
     "dropout_rate": (0.0, 1.0, 0.0),
     "reverse_shard_rate": (0.0, 1.0, 0.0),
+    "stutter_rate": (0.0, 1.0, 0.0),
+    "mute_rate": (0.0, 1.0, 0.0),
+    "repeat_rate": (0.0, 1.0, 0.0),
+    "beat_dropout_rate": (0.0, 1.0, 0.0),
 }
 
 PRESETS: Dict[str, Dict[str, object]] = {
@@ -62,6 +66,10 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "recurrence_prob": 0.55,
         "ghost_prob": 0.20,
         "silence_prob": 0.24,
+        "stutter_rate": 0.48,
+        "mute_rate": 0.18,
+        "repeat_rate": 0.38,
+        "beat_dropout_rate": 0.16,
     },
     "radio-intrusion": {
         "absurd_seriousness": 0.72,
@@ -85,6 +93,10 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "silence_prob": 0.30,
         "dropout_rate": 0.42,
         "reverse_shard_rate": 0.24,
+        "stutter_rate": 0.72,
+        "mute_rate": 0.26,
+        "repeat_rate": 0.52,
+        "beat_dropout_rate": 0.24,
     },
     "ghost-transmission": {
         "absurd_seriousness": 0.66,
@@ -184,7 +196,7 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("700x640")
+    root.geometry("700x760")
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill=tk.BOTH, expand=True)

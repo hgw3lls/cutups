@@ -129,12 +129,23 @@ python3 PY/cutup.py \
   --input ./loops \
   --bpm 120 \
   --slice-grid 1/16 \
+  --stutter-rate 0.55 \
+  --repeat-rate 0.45 \
+  --mute-rate 0.20 \
+  --beat-dropout-rate 0.15 \
   --output out/beat_cutup \
   --duration 45 \
   --seed 23
 ```
 
 Useful grid values: `1/4`, `1/8`, `1/16`, `1/32`, `1/8t`, `1/16t`. Grid mode quantizes source slice lengths and event starts, while repeats, ghosts, reversals, and gaps can still disrupt the loop.
+
+Beat controls only act when the grid is active:
+
+- `--stutter-rate 0..1`: retriggers tiny pieces inside grid cells.
+- `--repeat-rate 0..1`: repeats grid cells to create fills and skips.
+- `--mute-rate 0..1`: replaces individual grid cells with silence.
+- `--beat-dropout-rate 0..1`: cuts longer grid-aligned holes.
 
 ## Radio Intrusion
 
@@ -155,6 +166,11 @@ python3 PY/cutup.py \
   --mode audio \
   --preset hard-stutter \
   --input ./loops \
+  --bpm 120 \
+  --slice-grid 1/32 \
+  --stutter-rate 0.85 \
+  --repeat-rate 0.65 \
+  --mute-rate 0.30 \
   --output out/hard_stutter \
   --duration 30 \
   --seed 41

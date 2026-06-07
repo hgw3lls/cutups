@@ -64,6 +64,10 @@ class LiveControlTests(unittest.TestCase):
             dropout_rate=0.0,
             reverse_shard_rate=0.0,
             filter_severity="auto",
+            stutter_rate=0.0,
+            mute_rate=0.0,
+            repeat_rate=0.0,
+            beat_dropout_rate=0.0,
         )
         runtime = cutup.RuntimeParams(
             absurd_seriousness=0.2,
@@ -77,12 +81,20 @@ class LiveControlTests(unittest.TestCase):
             dropout_rate=0.8,
             reverse_shard_rate=0.7,
             filter_severity="hard",
+            stutter_rate=0.6,
+            mute_rate=0.5,
+            repeat_rate=0.4,
+            beat_dropout_rate=0.3,
         )
         out = cutup.apply_runtime_params(args, runtime)
         self.assertEqual(out.burst_rate, 0.9)
         self.assertEqual(out.dropout_rate, 0.8)
         self.assertEqual(out.reverse_shard_rate, 0.7)
         self.assertEqual(out.filter_severity, "hard")
+        self.assertEqual(out.stutter_rate, 0.6)
+        self.assertEqual(out.mute_rate, 0.5)
+        self.assertEqual(out.repeat_rate, 0.4)
+        self.assertEqual(out.beat_dropout_rate, 0.3)
 
     def test_apply_preset_keeps_explicit_cli_values(self) -> None:
         args = types.SimpleNamespace(
@@ -104,6 +116,18 @@ class LiveControlTests(unittest.TestCase):
         args = types.SimpleNamespace(preset="beat-cutup", _explicit_args=set(), slice_grid="off")
         cutup.apply_preset(args)
         self.assertEqual(args.slice_grid, "1/16")
+        self.assertEqual(args.stutter_rate, 0.48)
+        self.assertEqual(args.mute_rate, 0.18)
+        self.assertEqual(args.repeat_rate, 0.38)
+        self.assertEqual(args.beat_dropout_rate, 0.16)
+
+    def test_beat_control_rates_clamps_values(self) -> None:
+        args = types.SimpleNamespace(stutter_rate=2.0, mute_rate=-1.0, repeat_rate=0.25, beat_dropout_rate=1.2)
+        rates = cutup.beat_control_rates(args)
+        self.assertEqual(rates["stutter_rate"], 1.0)
+        self.assertEqual(rates["mute_rate"], 0.0)
+        self.assertEqual(rates["repeat_rate"], 0.25)
+        self.assertEqual(rates["beat_dropout_rate"], 1.0)
 
     def test_spoken_word_preset_sets_voice_controls(self) -> None:
         args = types.SimpleNamespace(
@@ -237,6 +261,10 @@ class LiveControlTests(unittest.TestCase):
                             "dropout_rate": 0.44,
                             "reverse_shard_rate": -1.0,
                             "filter_severity": "hard",
+                            "stutter_rate": 1.5,
+                            "mute_rate": 0.25,
+                            "repeat_rate": 0.5,
+                            "beat_dropout_rate": -0.1,
                             "force_section": "collapse",
                             "hold_section": True,
                             "burst_now": True,
@@ -253,6 +281,10 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(live.overrides["burst_rate"], 1.0)
             self.assertEqual(live.overrides["dropout_rate"], 0.44)
             self.assertEqual(live.overrides["reverse_shard_rate"], 0.0)
+            self.assertEqual(live.overrides["stutter_rate"], 1.0)
+            self.assertEqual(live.overrides["mute_rate"], 0.25)
+            self.assertEqual(live.overrides["repeat_rate"], 0.5)
+            self.assertEqual(live.overrides["beat_dropout_rate"], 0.0)
             self.assertEqual(live.filter_severity_override, "hard")
             self.assertEqual(live.section_override, "COLLAPSE")
             self.assertTrue(live.hold_section)
@@ -288,11 +320,27 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(live.overrides, {})
 
     def test_td_bridge_clamp_payload(self) -> None:
-        clamped = td_bridge.clamp_payload({"absurd_seriousness": 9, "ghost_prob": -2, "burst_rate": 1.4, "dropout_rate": 0.2, "x": 1})
+        clamped = td_bridge.clamp_payload(
+            {
+                "absurd_seriousness": 9,
+                "ghost_prob": -2,
+                "burst_rate": 1.4,
+                "dropout_rate": 0.2,
+                "stutter_rate": 2,
+                "mute_rate": -1,
+                "repeat_rate": 0.6,
+                "beat_dropout_rate": 0.4,
+                "x": 1,
+            }
+        )
         self.assertEqual(clamped["absurd_seriousness"], 1.0)
         self.assertEqual(clamped["ghost_prob"], 0.0)
         self.assertEqual(clamped["burst_rate"], 1.0)
         self.assertEqual(clamped["dropout_rate"], 0.2)
+        self.assertEqual(clamped["stutter_rate"], 1.0)
+        self.assertEqual(clamped["mute_rate"], 0.0)
+        self.assertEqual(clamped["repeat_rate"], 0.6)
+        self.assertEqual(clamped["beat_dropout_rate"], 0.4)
         self.assertNotIn("x", clamped)
 
     def test_td_bridge_extracts_conductor_controls(self) -> None:

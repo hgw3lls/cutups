@@ -31,6 +31,10 @@ ALLOWED: Dict[str, Tuple[float, float]] = {
     "burst_rate": (0.0, 1.0),
     "dropout_rate": (0.0, 1.0),
     "reverse_shard_rate": (0.0, 1.0),
+    "stutter_rate": (0.0, 1.0),
+    "mute_rate": (0.0, 1.0),
+    "repeat_rate": (0.0, 1.0),
+    "beat_dropout_rate": (0.0, 1.0),
 }
 
 

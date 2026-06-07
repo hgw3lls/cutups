@@ -124,7 +124,12 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
     "burst_rate": (0.0, 1.0),
     "dropout_rate": (0.0, 1.0),
     "reverse_shard_rate": (0.0, 1.0),
+    "stutter_rate": (0.0, 1.0),
+    "mute_rate": (0.0, 1.0),
+    "repeat_rate": (0.0, 1.0),
+    "beat_dropout_rate": (0.0, 1.0),
 }
+BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -191,6 +196,10 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "min_frag": 0.08,
             "max_frag": 0.65,
             "slice_grid": "1/16",
+            "stutter_rate": 0.48,
+            "mute_rate": 0.18,
+            "repeat_rate": 0.38,
+            "beat_dropout_rate": 0.16,
         },
     },
     "radio-intrusion": {
@@ -232,6 +241,10 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "max_frag": 0.4,
             "dropout_rate": 0.42,
             "reverse_shard_rate": 0.24,
+            "stutter_rate": 0.72,
+            "mute_rate": 0.26,
+            "repeat_rate": 0.52,
+            "beat_dropout_rate": 0.24,
         },
     },
     "ghost-transmission": {
@@ -390,6 +403,10 @@ class RuntimeParams:
     dropout_rate: float = 0.0
     reverse_shard_rate: float = 0.0
     filter_severity: str = ""
+    stutter_rate: float = 0.0
+    mute_rate: float = 0.0
+    repeat_rate: float = 0.0
+    beat_dropout_rate: float = 0.0
     force_section: str = ""
     hold_section: bool = False
     burst_now: bool = False
@@ -520,6 +537,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
+    p.add_argument("--stutter-rate", type=float, default=0.0, help="Beat-grid probability for retriggered stutter cells; requires active --bpm/--slice-grid.")
+    p.add_argument("--mute-rate", type=float, default=0.0, help="Beat-grid probability for replacing cells with silence; requires active --bpm/--slice-grid.")
+    p.add_argument("--repeat-rate", type=float, default=0.0, help="Beat-grid probability for repeating cells; requires active --bpm/--slice-grid.")
+    p.add_argument("--beat-dropout-rate", type=float, default=0.0, help="Beat-grid probability for longer grid-aligned dropouts; requires active --bpm/--slice-grid.")
     p.add_argument("--memory-depth", type=int, default=10, help="Rolling memory depth for ghost recurrence.")
     p.add_argument("--silence-prob", type=float, default=0.15, help="Probability of dead-air insertion.")
     p.add_argument("--recurrence-prob", type=float, default=0.28, help="Probability to reuse previous source memory.")
@@ -636,6 +657,8 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     args.burst_rate = clamp(args.burst_rate, 0.0, 1.0)
     args.dropout_rate = clamp(args.dropout_rate, 0.0, 1.0)
     args.reverse_shard_rate = clamp(args.reverse_shard_rate, 0.0, 1.0)
+    for key, value in beat_control_rates(args).items():
+        setattr(args, key, value)
     args.text_chaos = clamp(args.text_chaos, 0.0, 1.5)
     args.absurd_seriousness = clamp(args.absurd_seriousness, 0.0, 1.0)
     return args
@@ -648,6 +671,13 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def clamp(v: float, low: float, high: float) -> float:
     return max(low, min(high, v))
+
+
+def beat_control_rates(args: argparse.Namespace) -> Dict[str, float]:
+    return {
+        key: clamp(float(getattr(args, key, 0.0) or 0.0), 0.0, 1.0)
+        for key in BEAT_RATE_KEYS
+    }
 
 
 def build_live_control(args: argparse.Namespace) -> Optional[LiveControlState]:
@@ -680,6 +710,10 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
             dropout_rate=values["dropout_rate"],
             reverse_shard_rate=values["reverse_shard_rate"],
             filter_severity=live.filter_severity_override,
+            stutter_rate=values["stutter_rate"],
+            mute_rate=values["mute_rate"],
+            repeat_rate=values["repeat_rate"],
+            beat_dropout_rate=values["beat_dropout_rate"],
             force_section=live.section_override,
             hold_section=live.hold_section,
             burst_now=live.burst_now,
@@ -697,6 +731,10 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
         dropout_rate=float(getattr(args, "dropout_rate", 0.0)),
         reverse_shard_rate=float(getattr(args, "reverse_shard_rate", 0.0)),
         filter_severity=str(getattr(args, "filter_severity", "")),
+        stutter_rate=float(getattr(args, "stutter_rate", 0.0)),
+        mute_rate=float(getattr(args, "mute_rate", 0.0)),
+        repeat_rate=float(getattr(args, "repeat_rate", 0.0)),
+        beat_dropout_rate=float(getattr(args, "beat_dropout_rate", 0.0)),
     )
 
 
@@ -714,6 +752,10 @@ def apply_runtime_params(args: argparse.Namespace, runtime: RuntimeParams) -> ar
     local_args.reverse_shard_rate = runtime.reverse_shard_rate
     if runtime.filter_severity:
         local_args.filter_severity = runtime.filter_severity
+    local_args.stutter_rate = runtime.stutter_rate
+    local_args.mute_rate = runtime.mute_rate
+    local_args.repeat_rate = runtime.repeat_rate
+    local_args.beat_dropout_rate = runtime.beat_dropout_rate
     return local_args
 
 
@@ -932,6 +974,19 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
         print(f"beat_grid: {args.bpm:g} bpm {args.slice_grid} ({grid_ms} ms)")
     else:
         print(f"beat_grid: inactive (bpm={args.bpm:g}, slice_grid={args.slice_grid})")
+    beat_rates = beat_control_rates(args)
+    if any(beat_rates.values()):
+        state = "active" if grid_ms > 0 else "inactive until --bpm and --slice-grid are active"
+        print(
+            "beat_controls: "
+            f"stutter={beat_rates['stutter_rate']:.2f} "
+            f"mute={beat_rates['mute_rate']:.2f} "
+            f"repeat={beat_rates['repeat_rate']:.2f} "
+            f"dropout={beat_rates['beat_dropout_rate']:.2f} "
+            f"({state})"
+        )
+    else:
+        print("beat_controls: off")
     print(f"pydub: {'ok' if ('pydub' in sys.modules or importlib.util.find_spec('pydub')) else 'missing'}")
     print(f"ffmpeg: {shutil.which('ffmpeg') or shutil.which('avconv') or 'missing'}")
     if args.mode in {"audio", "both", "all"}:
@@ -1907,6 +1962,70 @@ def apply_noise_bursts(audio: AudioSegment, args: argparse.Namespace) -> Tuple[A
     return audio, changed
 
 
+def _silent_like(audio: AudioSegment, duration_ms: int) -> AudioSegment:
+    return AudioSegment.silent(duration=max(0, duration_ms), frame_rate=audio.frame_rate).set_channels(audio.channels)
+
+
+def apply_beat_grid_controls(audio: AudioSegment, args: argparse.Namespace, grid_ms: int) -> Tuple[AudioSegment, Set[str], int]:
+    rates = beat_control_rates(args)
+    if grid_ms <= 0 or len(audio) < 8 or not any(rates.values()):
+        return audio, set(), 1
+
+    cell_ms = max(8, min(grid_ms, len(audio)))
+    out = AudioSegment.silent(duration=0, frame_rate=audio.frame_rate).set_channels(audio.channels)
+    tags: Set[str] = set()
+    max_repeat = 1
+
+    cursor = 0
+    while cursor < len(audio):
+        cell = audio[cursor : min(len(audio), cursor + cell_ms)]
+        cursor += cell_ms
+        if len(cell) <= 0:
+            continue
+
+        current = cell
+        if rates["stutter_rate"] > 0 and random.random() < rates["stutter_rate"] and len(cell) >= 16:
+            sub_len = max(8, min(len(cell), random.choice([max(8, cell_ms // 8), max(8, cell_ms // 4), max(8, cell_ms // 2)])))
+            sub_start = 0 if len(cell) <= sub_len else random.randint(0, max(0, len(cell) - sub_len))
+            sub = cell[sub_start : sub_start + sub_len]
+            stuttered = AudioSegment.silent(duration=0, frame_rate=audio.frame_rate).set_channels(audio.channels)
+            while len(stuttered) < len(cell):
+                stuttered += sub
+            current = stuttered[: len(cell)]
+            tags.add("beatstutter")
+
+        if rates["mute_rate"] > 0 and random.random() < rates["mute_rate"]:
+            current = _silent_like(audio, len(cell))
+            tags.add("beatmute")
+
+        out += current
+
+        if rates["repeat_rate"] > 0 and random.random() < rates["repeat_rate"]:
+            extra = random.randint(1, max(1, 1 + int(rates["repeat_rate"] * 3)))
+            for _ in range(extra):
+                out += current
+            max_repeat = max(max_repeat, extra + 1)
+            tags.add("beatrepeat")
+
+    if rates["beat_dropout_rate"] > 0 and len(out) >= cell_ms and random.random() < rates["beat_dropout_rate"]:
+        holes = random.randint(1, max(1, 1 + int(rates["beat_dropout_rate"] * 3)))
+        for _ in range(holes):
+            starts = list(range(0, max(1, len(out) - cell_ms + 1), cell_ms))
+            if not starts:
+                break
+            start = random.choice(starts)
+            dur = min(len(out) - start, cell_ms * random.choice([1, 1, 2, 4]))
+            if dur <= 0:
+                continue
+            out = out[:start] + _silent_like(audio, dur) + out[start + dur :]
+            tags.add("beatdrop")
+
+    max_len = max(len(audio), len(audio) * 3)
+    if len(out) > max_len:
+        out = out[:max_len]
+    return out, tags, max_repeat
+
+
 def filter_pair(args: argparse.Namespace) -> Tuple[int, int]:
     severity = str(getattr(args, "filter_severity", "auto"))
     if severity == "light":
@@ -1978,6 +2097,11 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
     if swarm_mode:
         repeated = max(repeated, 3)
 
+    beat_tags: Set[str] = set()
+    beat_repeat = 1
+    audio, beat_tags, beat_repeat = apply_beat_grid_controls(audio, args, beat_grid_ms(args))
+    repeated = max(repeated, beat_repeat)
+
     if random.random() < float(profile.get("hard_cut", 0.22 if concrete else 0.14)):
         # hard interruption: chop center out to create phrase discontinuity.
         mid = len(audio) // 2
@@ -2013,6 +2137,9 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
         transform += "+shards"
     if swarm_mode:
         transform += "+swarm"
+    for tag in ("beatstutter", "beatmute", "beatrepeat", "beatdrop"):
+        if tag in beat_tags:
+            transform += f"+{tag}"
     if dropout_mode:
         transform += "+dropout"
     if burst_mode:
@@ -2271,6 +2398,10 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 dropout_rate=local_args.dropout_rate,
                 reverse_shard_rate=local_args.reverse_shard_rate,
                 filter_severity=local_args.filter_severity,
+                stutter_rate=local_args.stutter_rate,
+                mute_rate=local_args.mute_rate,
+                repeat_rate=local_args.repeat_rate,
+                beat_dropout_rate=local_args.beat_dropout_rate,
             )
 
     return voice_main, voice_cuts, ghosts, events

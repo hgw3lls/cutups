@@ -76,7 +76,7 @@ Available preset names:
 Beat-oriented cutups can use manual grid slicing:
 
 ```bash
-python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --output out/beat_demo
+python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --stutter-rate 0.55 --repeat-rate 0.45 --mute-rate 0.2 --beat-dropout-rate 0.15 --output out/beat_demo
 ```
 
 Spoken-word cutups can bias toward intelligibility or rupture:
@@ -342,6 +342,10 @@ Supported live keys in the JSON file:
 - `burst_rate` (`0.0..1.0`)
 - `dropout_rate` (`0.0..1.0`)
 - `reverse_shard_rate` (`0.0..1.0`)
+- `stutter_rate` (`0.0..1.0`)
+- `mute_rate` (`0.0..1.0`)
+- `repeat_rate` (`0.0..1.0`)
+- `beat_dropout_rate` (`0.0..1.0`)
 - `filter_severity` (`auto | light | medium | hard`)
 - `force_section` (`"" | ENTRY | BUILD | PRESSURE | COLLAPSE | AFTERIMAGE`)
 - `hold_section` (`true|false`)
@@ -402,7 +406,7 @@ python PY/cutup.py \
 3) In TouchDesigner, send UDP packets containing JSON objects (from UDP Out DAT/CHOP), for example:
 
 ```json
-{"version":2,"controls":{"absurd_seriousness":0.9,"recurrence_prob":0.62,"ghost_prob":0.5,"burst_rate":0.8,"dropout_rate":0.6,"filter_severity":"hard","force_section":"COLLAPSE","burst_now":true}}
+{"version":2,"controls":{"absurd_seriousness":0.9,"recurrence_prob":0.62,"ghost_prob":0.5,"burst_rate":0.8,"dropout_rate":0.6,"stutter_rate":0.7,"repeat_rate":0.5,"filter_severity":"hard","force_section":"COLLAPSE","burst_now":true}}
 ```
 
 Notes:
