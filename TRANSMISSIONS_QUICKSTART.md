@@ -37,6 +37,19 @@ python3 PY/cutup.py \
   --seed 7
 ```
 
+Add a short audition file beside the full master:
+
+```bash
+python3 PY/cutup.py \
+  --mode audio \
+  --preset signal-breach \
+  --input ./samples \
+  --output out/signal_breach_preview \
+  --duration 60 \
+  --preview-duration 12 \
+  --seed 7
+```
+
 Signal-breach controls:
 
 - `--burst-rate 0..1`: inserts static/noise bursts into fragments.
@@ -160,3 +173,5 @@ python3 PY/cutup.py \
 ## Output Safety
 
 By default, if the requested output folder already exists and contains files, `cutups` writes to a numbered sibling such as `out/signal_breach_02`. Use `--overwrite` only when you intentionally want to render into an existing non-empty folder.
+
+Use `--preview-duration <seconds>` to write a short `cutup_XX_preview.wav` beside each full master for fast auditioning.

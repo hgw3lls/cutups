@@ -480,6 +480,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--list-presets", action="store_true", help="Print available TRANSMISSIONS presets and exit.")
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
+    p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
 
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
     p.add_argument("--duration", type=float, default=90.0, help="Composition duration in seconds.")
@@ -589,6 +590,8 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--sample-rate must be >= 8000")
     if args.duration <= 0:
         raise SystemExit("--duration must be > 0")
+    if args.preview_duration < 0:
+        raise SystemExit("--preview-duration must be >= 0")
     if args.bpm < 0:
         raise SystemExit("--bpm must be >= 0")
     if args.bpm and not 20 <= args.bpm <= 300:
@@ -879,6 +882,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"seed: {args.seed}")
     print(f"output: {output_root}")
     print(f"duration: {args.duration}s")
+    print(f"preview_duration: {args.preview_duration}s" if args.preview_duration > 0 else "preview_duration: off")
     print(f"variants: {args.variants}")
     print(f"density: {args.density}")
     print(f"sectional: {args.sectional}")
@@ -1809,6 +1813,13 @@ def make_hiss(duration_ms: int, frame_rate: int) -> AudioSegment:
     return low_pass_filter(high_pass_filter(bed, 4200), 10800) - 12
 
 
+def preview_duration_ms(args: argparse.Namespace, audio_len_ms: int) -> int:
+    requested_s = float(getattr(args, "preview_duration", 0.0) or 0.0)
+    if requested_s <= 0 or audio_len_ms <= 0:
+        return 0
+    return max(1, min(audio_len_ms, int(round(requested_s * 1000))))
+
+
 def make_noise_burst(duration_ms: int, frame_rate: int, channels: int) -> AudioSegment:
     burst = WhiteNoise().to_audio_segment(duration=max(4, duration_ms)).set_frame_rate(frame_rate).set_channels(channels)
     burst = high_pass_filter(burst, random.choice([1800, 2600, 4200, 6200]))
@@ -2261,6 +2272,11 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     event_path = variant_dir / f"{variant_name}_events.csv"
     score_path = variant_dir / f"{variant_name}_score.txt"
     master.export(master_path, format="wav")
+    preview_path: Optional[Path] = None
+    preview_ms = preview_duration_ms(args, len(master))
+    if preview_ms > 0:
+        preview_path = variant_dir / f"{variant_name}_preview.wav"
+        master[:preview_ms].export(preview_path, format="wav")
     export_manifest(event_path, events)
     score_path.write_text(build_section_score(events), encoding="utf-8")
 
@@ -2268,6 +2284,8 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     summary.section_distribution.update([e.section for e in events])
     summary.recurring_sources.update([e.source_basename for e in events if e.recurrence_index > 1])
     summary.output_paths.extend([str(master_path), str(event_path), str(score_path)])
+    if preview_path:
+        summary.output_paths.append(str(preview_path))
 
 
 def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary, live: Optional[LiveControlState] = None) -> None:

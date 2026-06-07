@@ -154,6 +154,15 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(cutup.quantize_to_grid(188, 125), 250)
         self.assertEqual(cutup.quantize_to_grid(187, 125), 125)
 
+    def test_preview_duration_ms_clamps_to_audio_length(self) -> None:
+        args = types.SimpleNamespace(preview_duration=12.0)
+        self.assertEqual(cutup.preview_duration_ms(args, 5000), 5000)
+        self.assertEqual(cutup.preview_duration_ms(args, 15000), 12000)
+
+    def test_preview_duration_ms_disabled_by_default(self) -> None:
+        args = types.SimpleNamespace(preview_duration=0.0)
+        self.assertEqual(cutup.preview_duration_ms(args, 5000), 0)
+
     def test_clamp_to_section_preserves_grid_when_possible(self) -> None:
         self.assertEqual(cutup.clamp_to_section(4870, (0, 5000), 700, grid_ms=125), 4250)
 

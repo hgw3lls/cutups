@@ -56,6 +56,12 @@ Check a render setup without writing audio:
 python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --output out/preview --dry-run
 ```
 
+Render a short audition file beside the full master:
+
+```bash
+python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --output out/breach_preview --preview-duration 12
+```
+
 See [TRANSMISSIONS_QUICKSTART.md](TRANSMISSIONS_QUICKSTART.md) for signal-breach, spoken-word, beat-cutup, radio-intrusion, hard-stutter, and ghost-transmission recipes.
 
 Available preset names:
@@ -297,6 +303,7 @@ Inside your `--output` directory you will usually see:
 - `agitprop/chant_cells.csv`
 - `cuttargets/cut_targets.csv` (or equivalent cuttarget output)
 - `audio_cutups/cutup_XX/cutup_XX_master.wav`
+- `audio_cutups/cutup_XX/cutup_XX_preview.wav` (when `--preview-duration` is set)
 - `audio_cutups/cutup_XX/cutup_XX_events.csv`
 - `audio_cutups/cutup_XX/cutup_XX_score.txt`
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
