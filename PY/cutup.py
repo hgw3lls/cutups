@@ -121,6 +121,9 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
     "recurrence_prob": (0.0, 0.95),
     "ghost_prob": (0.0, 0.95),
     "silence_prob": (0.0, 0.95),
+    "burst_rate": (0.0, 1.0),
+    "dropout_rate": (0.0, 1.0),
+    "reverse_shard_rate": (0.0, 1.0),
 }
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
@@ -383,6 +386,10 @@ class RuntimeParams:
     recurrence_prob: float
     ghost_prob: float
     silence_prob: float
+    burst_rate: float = 0.0
+    dropout_rate: float = 0.0
+    reverse_shard_rate: float = 0.0
+    filter_severity: str = ""
     force_section: str = ""
     hold_section: bool = False
     burst_now: bool = False
@@ -399,6 +406,7 @@ class LiveControlState:
     last_mtime_ns: int = -1
     overrides: Dict[str, float] = field(default_factory=dict)
     section_override: str = ""
+    filter_severity_override: str = ""
     hold_section: bool = False
     burst_now: bool = False
     panic_silence: bool = False
@@ -438,6 +446,12 @@ class LiveControlState:
 
         sec = str(controls.get("force_section", "")).strip().upper()
         self.section_override = sec if sec in SECTION_NAMES else ""
+        if "filter_severity" in controls:
+            filter_severity = str(controls.get("filter_severity", "")).strip().lower()
+            if filter_severity in {"", "auto"}:
+                self.filter_severity_override = ""
+            elif filter_severity in {"light", "medium", "hard"}:
+                self.filter_severity_override = filter_severity
         self.hold_section = bool(controls.get("hold_section", False))
         self.burst_now = bool(controls.get("burst_now", False))
         self.panic_silence = bool(controls.get("panic_silence", False))
@@ -455,6 +469,8 @@ class LiveControlState:
             "where": where,
             "overrides": self.overrides,
         }
+        if self.filter_severity_override:
+            row["filter_severity"] = self.filter_severity_override
         row.update(fields)
         try:
             with self.telemetry_path.open("a", encoding="utf-8") as f:
@@ -660,6 +676,10 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
             recurrence_prob=values["recurrence_prob"],
             ghost_prob=values["ghost_prob"],
             silence_prob=values["silence_prob"],
+            burst_rate=values["burst_rate"],
+            dropout_rate=values["dropout_rate"],
+            reverse_shard_rate=values["reverse_shard_rate"],
+            filter_severity=live.filter_severity_override,
             force_section=live.section_override,
             hold_section=live.hold_section,
             burst_now=live.burst_now,
@@ -673,6 +693,10 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
         recurrence_prob=float(args.recurrence_prob),
         ghost_prob=float(args.ghost_prob),
         silence_prob=float(args.silence_prob),
+        burst_rate=float(getattr(args, "burst_rate", 0.0)),
+        dropout_rate=float(getattr(args, "dropout_rate", 0.0)),
+        reverse_shard_rate=float(getattr(args, "reverse_shard_rate", 0.0)),
+        filter_severity=str(getattr(args, "filter_severity", "")),
     )
 
 
@@ -685,6 +709,11 @@ def apply_runtime_params(args: argparse.Namespace, runtime: RuntimeParams) -> ar
     local_args.recurrence_prob = runtime.recurrence_prob
     local_args.ghost_prob = runtime.ghost_prob
     local_args.silence_prob = runtime.silence_prob
+    local_args.burst_rate = runtime.burst_rate
+    local_args.dropout_rate = runtime.dropout_rate
+    local_args.reverse_shard_rate = runtime.reverse_shard_rate
+    if runtime.filter_severity:
+        local_args.filter_severity = runtime.filter_severity
     return local_args
 
 
@@ -2238,6 +2267,10 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 hold_section=runtime.hold_section,
                 burst_now=runtime.burst_now,
                 panic_silence=runtime.panic_silence,
+                burst_rate=local_args.burst_rate,
+                dropout_rate=local_args.dropout_rate,
+                reverse_shard_rate=local_args.reverse_shard_rate,
+                filter_severity=local_args.filter_severity,
             )
 
     return voice_main, voice_cuts, ghosts, events

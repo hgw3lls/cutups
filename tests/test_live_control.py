@@ -51,6 +51,39 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(runtime.absurd_seriousness, 0.2)
         self.assertEqual(runtime.ghost_prob, 0.7)
 
+    def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
+        args = types.SimpleNamespace(
+            absurd_seriousness=0.2,
+            text_chaos=0.3,
+            rupture_prob=0.4,
+            stutter_prob=0.5,
+            recurrence_prob=0.6,
+            ghost_prob=0.7,
+            silence_prob=0.8,
+            burst_rate=0.0,
+            dropout_rate=0.0,
+            reverse_shard_rate=0.0,
+            filter_severity="auto",
+        )
+        runtime = cutup.RuntimeParams(
+            absurd_seriousness=0.2,
+            text_chaos=0.3,
+            rupture_prob=0.4,
+            stutter_prob=0.5,
+            recurrence_prob=0.6,
+            ghost_prob=0.7,
+            silence_prob=0.8,
+            burst_rate=0.9,
+            dropout_rate=0.8,
+            reverse_shard_rate=0.7,
+            filter_severity="hard",
+        )
+        out = cutup.apply_runtime_params(args, runtime)
+        self.assertEqual(out.burst_rate, 0.9)
+        self.assertEqual(out.dropout_rate, 0.8)
+        self.assertEqual(out.reverse_shard_rate, 0.7)
+        self.assertEqual(out.filter_severity, "hard")
+
     def test_apply_preset_keeps_explicit_cli_values(self) -> None:
         args = types.SimpleNamespace(
             preset="signal-breach",
@@ -200,6 +233,10 @@ class LiveControlTests(unittest.TestCase):
                             "absurd_seriousness": 1.7,
                             "ghost_prob": -1,
                             "silence_prob": 0.3,
+                            "burst_rate": 2.0,
+                            "dropout_rate": 0.44,
+                            "reverse_shard_rate": -1.0,
+                            "filter_severity": "hard",
                             "force_section": "collapse",
                             "hold_section": True,
                             "burst_now": True,
@@ -213,9 +250,19 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(live.overrides["absurd_seriousness"], 1.0)
             self.assertEqual(live.overrides["ghost_prob"], 0.0)
             self.assertEqual(live.overrides["silence_prob"], 0.3)
+            self.assertEqual(live.overrides["burst_rate"], 1.0)
+            self.assertEqual(live.overrides["dropout_rate"], 0.44)
+            self.assertEqual(live.overrides["reverse_shard_rate"], 0.0)
+            self.assertEqual(live.filter_severity_override, "hard")
             self.assertEqual(live.section_override, "COLLAPSE")
             self.assertTrue(live.hold_section)
             self.assertTrue(live.burst_now)
+
+            control_path.write_text(json.dumps({"version": 2, "controls": {"burst_rate": 0.2}}), encoding="utf-8")
+            live.last_mtime_ns = -1
+            live.poll()
+            self.assertEqual(live.overrides["burst_rate"], 0.2)
+            self.assertEqual(live.filter_severity_override, "hard")
 
     def test_live_poll_accepts_legacy_flat_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -241,17 +288,21 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(live.overrides, {})
 
     def test_td_bridge_clamp_payload(self) -> None:
-        clamped = td_bridge.clamp_payload({"absurd_seriousness": 9, "ghost_prob": -2, "x": 1})
+        clamped = td_bridge.clamp_payload({"absurd_seriousness": 9, "ghost_prob": -2, "burst_rate": 1.4, "dropout_rate": 0.2, "x": 1})
         self.assertEqual(clamped["absurd_seriousness"], 1.0)
         self.assertEqual(clamped["ghost_prob"], 0.0)
+        self.assertEqual(clamped["burst_rate"], 1.0)
+        self.assertEqual(clamped["dropout_rate"], 0.2)
         self.assertNotIn("x", clamped)
 
     def test_td_bridge_extracts_conductor_controls(self) -> None:
-        out = td_bridge.extract_conductor_controls({"force_section": "pressure", "hold_section": 1, "burst_now": 0, "panic_silence": True})
+        out = td_bridge.extract_conductor_controls({"force_section": "pressure", "filter_severity": "medium", "hold_section": 1, "burst_now": 0, "panic_silence": True})
         self.assertEqual(out["force_section"], "PRESSURE")
+        self.assertEqual(out["filter_severity"], "medium")
         self.assertTrue(out["hold_section"])
         self.assertFalse(out["burst_now"])
         self.assertTrue(out["panic_silence"])
+        self.assertNotIn("filter_severity", td_bridge.extract_conductor_controls({"force_section": "entry"}))
 
 
 if __name__ == "__main__":

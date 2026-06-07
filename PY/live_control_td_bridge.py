@@ -28,6 +28,9 @@ ALLOWED: Dict[str, Tuple[float, float]] = {
     "recurrence_prob": (0.0, 0.95),
     "ghost_prob": (0.0, 0.95),
     "silence_prob": (0.0, 0.95),
+    "burst_rate": (0.0, 1.0),
+    "dropout_rate": (0.0, 1.0),
+    "reverse_shard_rate": (0.0, 1.0),
 }
 
 
@@ -49,6 +52,10 @@ def extract_conductor_controls(raw: Dict[str, object]) -> Dict[str, object]:
     sec = str(raw.get("force_section", "")).strip().upper()
     if sec in {"", "ENTRY", "BUILD", "PRESSURE", "COLLAPSE", "AFTERIMAGE"}:
         out["force_section"] = sec
+    if "filter_severity" in raw:
+        filter_severity = str(raw.get("filter_severity", "")).strip().lower()
+        if filter_severity in {"", "auto", "light", "medium", "hard"}:
+            out["filter_severity"] = filter_severity
     for key in ("hold_section", "burst_now", "panic_silence"):
         if key in raw:
             out[key] = bool(raw.get(key))
@@ -80,7 +87,7 @@ def main() -> None:
     print(f"[td-bridge] listening on udp://{args.host}:{args.port}")
     print(f"[td-bridge] writing control file: {control_file}")
 
-    current: Dict[str, float] = {}
+    current: Dict[str, object] = {}
     while True:
         data, src = sock.recvfrom(65535)
         try:

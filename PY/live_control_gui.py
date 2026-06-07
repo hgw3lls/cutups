@@ -25,9 +25,12 @@ RANGES: Dict[str, Tuple[float, float, float]] = {
     "recurrence_prob": (0.0, 0.95, 0.28),
     "ghost_prob": (0.0, 0.95, 0.22),
     "silence_prob": (0.0, 0.95, 0.15),
+    "burst_rate": (0.0, 1.0, 0.0),
+    "dropout_rate": (0.0, 1.0, 0.0),
+    "reverse_shard_rate": (0.0, 1.0, 0.0),
 }
 
-PRESETS: Dict[str, Dict[str, float]] = {
+PRESETS: Dict[str, Dict[str, object]] = {
     "Default": {k: v[2] for k, v in RANGES.items()},
     "signal-breach": {
         "absurd_seriousness": 0.78,
@@ -37,6 +40,10 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "recurrence_prob": 0.48,
         "ghost_prob": 0.58,
         "silence_prob": 0.42,
+        "burst_rate": 0.58,
+        "dropout_rate": 0.64,
+        "reverse_shard_rate": 0.46,
+        "filter_severity": "hard",
     },
     "spoken-word-cutup": {
         "absurd_seriousness": 0.62,
@@ -64,6 +71,9 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "recurrence_prob": 0.46,
         "ghost_prob": 0.68,
         "silence_prob": 0.33,
+        "burst_rate": 0.24,
+        "dropout_rate": 0.28,
+        "filter_severity": "hard",
     },
     "hard-stutter": {
         "absurd_seriousness": 0.74,
@@ -73,6 +83,8 @@ PRESETS: Dict[str, Dict[str, float]] = {
         "recurrence_prob": 0.62,
         "ghost_prob": 0.32,
         "silence_prob": 0.30,
+        "dropout_rate": 0.42,
+        "reverse_shard_rate": 0.24,
     },
     "ghost-transmission": {
         "absurd_seriousness": 0.66,
@@ -121,6 +133,7 @@ class ControlGUI:
     status_var: tk.StringVar
     last_payload: Dict[str, object]
     section_var: tk.StringVar
+    filter_var: tk.StringVar
     hold_var: tk.BooleanVar
     burst_var: tk.BooleanVar
     panic_var: tk.BooleanVar
@@ -135,6 +148,7 @@ class ControlGUI:
         payload = {k: round(v.get(), 4) for k, v in self.vars.items()}
         controls = dict(payload)
         controls["force_section"] = self.section_var.get().strip().upper()
+        controls["filter_severity"] = self.filter_var.get().strip().lower()
         controls["hold_section"] = bool(self.hold_var.get())
         controls["burst_now"] = bool(self.burst_var.get())
         controls["panic_silence"] = bool(self.panic_var.get())
@@ -148,9 +162,9 @@ class ControlGUI:
 
     def apply_preset(self, preset_name: str) -> None:
         data = PRESETS.get(preset_name, PRESETS["Default"])
-        for key, val in data.items():
-            if key in self.vars:
-                self.vars[key].set(val)
+        for key, var in self.vars.items():
+            var.set(float(data.get(key, RANGES[key][2])))
+        self.filter_var.set(str(data.get("filter_severity", "auto")))
         self.write_payload()
 
     def reset_defaults(self) -> None:
@@ -170,7 +184,7 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("640x500")
+    root.geometry("700x640")
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill=tk.BOTH, expand=True)
@@ -192,6 +206,7 @@ def main() -> None:
 
     vars_map: Dict[str, tk.DoubleVar] = {k: tk.DoubleVar(value=default) for k, (_, _, default) in RANGES.items()}
     section_var = tk.StringVar(value="")
+    filter_var = tk.StringVar(value="auto")
     hold_var = tk.BooleanVar(value=False)
     burst_var = tk.BooleanVar(value=False)
     panic_var = tk.BooleanVar(value=False)
@@ -202,6 +217,7 @@ def main() -> None:
         status_var=status_var,
         last_payload={},
         section_var=section_var,
+        filter_var=filter_var,
         hold_var=hold_var,
         burst_var=burst_var,
         panic_var=panic_var,
@@ -226,6 +242,13 @@ def main() -> None:
             update_label()
 
         bind_value(vars_map[key], value_label)
+
+    filter_row = ttk.Frame(frame)
+    filter_row.pack(fill=tk.X, pady=(8, 4))
+    ttk.Label(filter_row, text="filter_severity", width=22).pack(side=tk.LEFT)
+    filter_combo = ttk.Combobox(filter_row, values=["auto", "light", "medium", "hard"], textvariable=filter_var, state="readonly", width=14)
+    filter_combo.pack(side=tk.LEFT, padx=(8, 10))
+    filter_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
     btns = ttk.Frame(frame)
     btns.pack(fill=tk.X, pady=(10, 8))

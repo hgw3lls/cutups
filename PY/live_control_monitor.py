@@ -41,6 +41,7 @@ def main() -> None:
     by_where = Counter()
     by_section = Counter()
     last_overrides: Dict[str, float] = {}
+    last_filter_severity = ""
 
     while True:
         try:
@@ -66,6 +67,9 @@ def main() -> None:
                     ov = row.get("overrides", {})
                     if isinstance(ov, dict):
                         last_overrides = {k: float(v) for k, v in ov.items() if isinstance(v, (int, float))}
+                    filter_severity = row.get("filter_severity", "")
+                    if isinstance(filter_severity, str) and filter_severity:
+                        last_filter_severity = filter_severity
         except OSError:
             pass
 
@@ -91,9 +95,11 @@ def main() -> None:
             print("  - (none yet)")
 
         print("\nlast overrides:")
-        if last_overrides:
+        if last_overrides or last_filter_severity:
             for k in sorted(last_overrides):
                 print(f"  - {k:18s} {last_overrides[k]:.3f}")
+            if last_filter_severity:
+                print(f"  - {'filter_severity':18s} {last_filter_severity}")
         else:
             print("  - (none yet)")
 
