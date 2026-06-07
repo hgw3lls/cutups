@@ -189,6 +189,30 @@ class LiveControlTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             cutup.parse_silence_insert_ms("420:120")
 
+    def test_parse_timecode_ms_accepts_srt_and_seconds(self) -> None:
+        self.assertEqual(cutup.parse_timecode_ms("00:01:02,345"), 62345)
+        self.assertEqual(cutup.parse_timecode_ms("01:02.500"), 62500)
+        self.assertEqual(cutup.parse_timecode_ms("3.25"), 3250)
+        self.assertIsNone(cutup.parse_timecode_ms("not time"))
+
+    def test_parse_srt_cues(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "voice.srt"
+            path.write_text(
+                "1\n"
+                "00:00:00,500 --> 00:00:01,750\n"
+                "first phrase\n\n"
+                "2\n"
+                "00:00:02,000 --> 00:00:03,250\n"
+                "second phrase\n",
+                encoding="utf-8",
+            )
+            rows = cutup.parse_srt_cues(path)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["start_ms"], 500)
+        self.assertEqual(rows[0]["end_ms"], 1750)
+        self.assertEqual(rows[0]["text"], "first phrase")
+
     def test_workflow_audio_profile_high_intelligibility_reduces_disruption(self) -> None:
         profile = {"reverse": 0.4, "repeat": 0.6, "filt": 0.8, "silence": 0.3, "ghost": 0.2}
         args = types.SimpleNamespace(intelligibility="high", interruption_density="low", concrete=False)

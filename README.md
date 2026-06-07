@@ -92,6 +92,12 @@ Spoken-word cutups can bias toward intelligibility or rupture:
 python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --phrase-length medium --intelligibility high --interruption-density low --silence-insert-ms 120:420 --output out/spoken_demo
 ```
 
+Use subtitle or cue files to cut on phrase boundaries:
+
+```bash
+python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --cue-file ./voice.srt --cue-slice-mode full --output out/spoken_cued
+```
+
 Signal-breach renders can push explicit transmission damage:
 
 ```bash
@@ -314,6 +320,8 @@ Inside your `--output` directory you will usually see:
 - `audio_cutups/cutup_XX/cutup_XX_events.csv`
 - `audio_cutups/cutup_XX/cutup_XX_score.txt`
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
+
+When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`, `source_cue_end_ms`, and `source_cue_text`.
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
 

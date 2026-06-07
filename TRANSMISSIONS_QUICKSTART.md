@@ -104,6 +104,23 @@ python3 PY/cutup.py \
   --seed 12
 ```
 
+To preserve phrase boundaries from subtitles or prepared cue sheets, pass an `.srt` or cue CSV:
+
+```bash
+python3 PY/cutup.py \
+  --mode audio \
+  --preset spoken-word-cutup \
+  --input ./voice/interview.wav \
+  --cue-file ./voice/interview.srt \
+  --cue-slice-mode full \
+  --intelligibility high \
+  --output out/spoken_cued \
+  --duration 90 \
+  --seed 13
+```
+
+Use `--cue-slice-mode fragment` when you want random sub-fragments inside each cue instead of whole subtitle spans. Cue CSVs can use columns such as `file`, `start_tc`, `end_tc`, `duration_sec`, and `text`; SRT files use the single `--input` audio file.
+
 Phrase-length values: `micro`, `short`, `medium`, `long`, `auto`.
 Intelligibility values: `high`, `medium`, `low`, `auto`.
 Interruption-density values: `low`, `medium`, `high`, `auto`.

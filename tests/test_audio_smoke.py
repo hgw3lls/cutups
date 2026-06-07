@@ -136,6 +136,54 @@ class AudioSmokeTests(unittest.TestCase):
             for tag in ("+grid", "+beatstutter", "+beatmute", "+beatrepeat", "+beatdrop"):
                 self.assertIn(tag, transforms)
 
+    def test_audio_cli_uses_srt_cues_as_phrase_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice_phrase.wav"
+            cues = root / "voice_phrase.srt"
+            output = root / "cue_render"
+            _write_tone_wav(source, duration_s=4.0)
+            cues.write_text(
+                "1\n"
+                "00:00:00,500 --> 00:00:01,500\n"
+                "first clear phrase\n\n"
+                "2\n"
+                "00:00:02,000 --> 00:00:03,250\n"
+                "second clear phrase\n",
+                encoding="utf-8",
+            )
+
+            self.run_cutup(
+                [
+                    "--mode",
+                    "audio",
+                    "--preset",
+                    "spoken-word-cutup",
+                    "--input",
+                    str(source),
+                    "--cue-file",
+                    str(cues),
+                    "--cue-slice-mode",
+                    "full",
+                    "--output",
+                    str(output),
+                    "--duration",
+                    "3",
+                    "--seed",
+                    "303",
+                    "--overwrite",
+                ]
+            )
+
+            events = output / "audio_cutups" / "cutup_01" / "cutup_01_events.csv"
+            rows = list(csv.DictReader(events.open(newline="", encoding="utf-8")))
+            self.assertGreaterEqual(len(rows), 1)
+            cue_texts = {row["source_cue_text"] for row in rows}
+            self.assertTrue(cue_texts <= {"first clear phrase", "second clear phrase"})
+            self.assertTrue({int(row["source_cue_start_ms"]) for row in rows} <= {500, 2000})
+            self.assertTrue(all(int(row["source_cue_start_ms"]) > 0 for row in rows))
+            self.assertTrue(all(int(row["source_duration_ms"]) in {1000, 1250} for row in rows))
+
     def test_audio_cli_same_seed_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

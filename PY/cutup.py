@@ -313,6 +313,13 @@ class SampleFile:
     words: int
     intensity_hint: int
     loop_hint: int
+    cue_start_ms: int = 0
+    cue_end_ms: int = 0
+    cue_text: str = ""
+    cue_index: int = 0
+
+    def has_cue(self) -> bool:
+        return self.cue_end_ms > self.cue_start_ms
 
 
 @dataclass
@@ -322,6 +329,9 @@ class Event:
     source: str
     source_basename: str
     source_duration_ms: int
+    source_cue_start_ms: int
+    source_cue_end_ms: int
+    source_cue_text: str
     start_ms: int
     end_ms: int
     fragment_duration_ms: int
@@ -516,6 +526,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
 
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
+    p.add_argument("--cue-file", default="", help="Optional SRT or CSV cue file for phrase-aware audio slicing.")
+    p.add_argument("--cue-slice-mode", choices=["full", "fragment"], default="full", help="Use full cue spans or random fragments inside each cue when --cue-file is set.")
     p.add_argument("--duration", type=float, default=90.0, help="Composition duration in seconds.")
     p.add_argument("--variants", type=int, default=1, help="Number of rendered variants.")
     p.add_argument("--sample-rate", type=int, default=44100, help="Export sample rate.")
@@ -805,6 +817,22 @@ def safe_int(value: str, default: int = 0) -> int:
         return default
 
 
+def parse_timecode_ms(raw: object) -> Optional[int]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return int(round(float(text) * 1000))
+    match = re.fullmatch(r"(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[,.](\d{1,3}))?", text)
+    if not match:
+        return None
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2))
+    seconds = int(match.group(3))
+    millis_text = (match.group(4) or "0").ljust(3, "0")[:3]
+    return ((hours * 3600 + minutes * 60 + seconds) * 1000) + int(millis_text)
+
+
 def cut_words(text: str) -> List[str]:
     return TOKEN_RE.findall(text)
 
@@ -917,6 +945,97 @@ def candidate_audio_paths(root: Path) -> List[Path]:
     return []
 
 
+def resolve_cue_audio_path(raw_file: str, input_root: Path, cue_file: Path, default_audio: Optional[Path]) -> Optional[Path]:
+    text = str(raw_file or "").strip()
+    if not text:
+        return default_audio
+    raw_path = Path(text).expanduser()
+    candidates: List[Path] = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        if input_root.is_dir():
+            candidates.append(input_root / raw_path)
+        else:
+            candidates.append(input_root.parent / raw_path)
+        candidates.append(cue_file.parent / raw_path)
+    for candidate in candidates:
+        if candidate.exists() and candidate.suffix.lower() in AUDIO_EXTS:
+            return candidate.resolve()
+    return None
+
+
+def parse_srt_cues(path: Path) -> List[Dict[str, object]]:
+    text = path.read_text(encoding="utf-8-sig")
+    blocks = re.split(r"\n\s*\n", text.replace("\r\n", "\n").replace("\r", "\n").strip())
+    rows: List[Dict[str, object]] = []
+    for block in blocks:
+        lines = [line.strip() for line in block.split("\n") if line.strip()]
+        if not lines:
+            continue
+        cue_index = safe_int(lines[0], len(rows) + 1)
+        timing_idx = 1 if len(lines) > 1 and "-->" in lines[1] else 0
+        timing_line = lines[timing_idx]
+        if "-->" not in timing_line:
+            continue
+        start_raw, end_raw = [part.strip().split()[0] for part in timing_line.split("-->", 1)]
+        start_ms = parse_timecode_ms(start_raw)
+        end_ms = parse_timecode_ms(end_raw)
+        if start_ms is None or end_ms is None or end_ms <= start_ms:
+            continue
+        text_start = timing_idx + 1
+        cue_text = clean_text(" ".join(lines[text_start:]))
+        rows.append({"cue_index": cue_index, "start_ms": start_ms, "end_ms": end_ms, "text": cue_text, "file": ""})
+    return rows
+
+
+def parse_csv_cues(path: Path) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames:
+            raise SystemExit(f"Cue CSV '{path}' has no header row.")
+        for idx, row in enumerate(reader, start=1):
+            start_ms = parse_timecode_ms(get_first_present(row, START_TC_COLUMN_CANDIDATES, ""))
+            end_ms = parse_timecode_ms(get_first_present(row, END_TC_COLUMN_CANDIDATES, ""))
+            if start_ms is None:
+                continue
+            if end_ms is None:
+                duration_s = safe_float(get_first_present(row, DURATION_COLUMN_CANDIDATES, "0"), 0.0)
+                end_ms = start_ms + int(round(duration_s * 1000)) if duration_s > 0 else None
+            if end_ms is None or end_ms <= start_ms:
+                continue
+            rows.append(
+                {
+                    "cue_index": safe_int(get_first_present(row, CUE_COLUMN_CANDIDATES, str(idx)), idx),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "text": clean_text(get_first_present(row, TEXT_COLUMN_CANDIDATES, "")),
+                    "file": get_first_present(row, FILE_COLUMN_CANDIDATES, ""),
+                }
+            )
+    return rows
+
+
+def load_cue_rows(path: Path) -> List[Dict[str, object]]:
+    suffix = path.suffix.lower()
+    if suffix == ".srt":
+        return parse_srt_cues(path)
+    if suffix == ".csv":
+        return parse_csv_cues(path)
+    raise SystemExit("--cue-file must be an .srt or .csv file")
+
+
+def cue_loop_hint(duration_ms: int) -> int:
+    if duration_ms <= 450:
+        return 3
+    if duration_ms <= 1350:
+        return 2
+    if duration_ms <= 3400:
+        return 1
+    return 0
+
+
 def is_nonempty_dir(path: Path) -> bool:
     try:
         return path.is_dir() and any(path.iterdir())
@@ -995,6 +1114,8 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
             candidates = candidate_audio_paths(input_path)
             print(f"input: {input_path}")
             print(f"audio candidates: {len(candidates)}")
+            print(f"cue_file: {Path(args.cue_file).expanduser().resolve() if args.cue_file else 'none'}")
+            print(f"cue_slice_mode: {args.cue_slice_mode}")
         else:
             print("input: missing (--input is required for audio/both/all)")
     if args.mode in {"agitprop", "cuttargets", "both", "all"}:
@@ -1780,6 +1901,61 @@ def discover_samples(root: Path) -> Tuple[List[SampleFile], int]:
     return samples, unreadable
 
 
+def discover_cue_samples(input_root: Path, cue_file: Path) -> Tuple[List[SampleFile], int]:
+    ensure_audio_backend()
+    if not cue_file.exists():
+        raise SystemExit(f"Cue file not found: {cue_file}")
+    if not cue_file.is_file():
+        raise SystemExit(f"--cue-file must point to an .srt or .csv file: {cue_file}")
+
+    default_audio: Optional[Path] = input_root if input_root.is_file() and input_root.suffix.lower() in AUDIO_EXTS else None
+    audio_candidates = candidate_audio_paths(input_root)
+    if default_audio is None and len(audio_candidates) == 1:
+        default_audio = audio_candidates[0]
+
+    duration_cache: Dict[Path, int] = {}
+    samples: List[SampleFile] = []
+    skipped = 0
+    for row in load_cue_rows(cue_file):
+        audio_path = resolve_cue_audio_path(str(row.get("file", "")), input_root, cue_file, default_audio)
+        if audio_path is None:
+            skipped += 1
+            continue
+        if audio_path not in duration_cache:
+            try:
+                duration_cache[audio_path] = len(AudioSegment.from_file(audio_path))
+            except Exception:
+                skipped += 1
+                continue
+        audio_duration = duration_cache[audio_path]
+        start_ms = int(row.get("start_ms", 0))
+        end_ms = int(row.get("end_ms", 0))
+        start_ms = int(clamp(start_ms, 0, max(0, audio_duration - 1)))
+        end_ms = int(clamp(end_ms, start_ms + 1, audio_duration))
+        if end_ms <= start_ms:
+            skipped += 1
+            continue
+        cue_text = str(row.get("text", "") or "")
+        duration_ms = end_ms - start_ms
+        words = max(1, count_words(cue_text) or len(TOKEN_RE.findall(audio_path.stem)))
+        low = f"{audio_path} {cue_text}".lower()
+        intensity = sum(1 for k in ["threat", "warning", "command", "official", "censor", "collapse"] if k in low)
+        samples.append(
+            SampleFile(
+                path=audio_path,
+                duration_ms=duration_ms,
+                words=words,
+                intensity_hint=intensity,
+                loop_hint=cue_loop_hint(duration_ms),
+                cue_start_ms=start_ms,
+                cue_end_ms=end_ms,
+                cue_text=cue_text,
+                cue_index=int(row.get("cue_index", 0) or 0),
+            )
+        )
+    return samples, skipped
+
+
 def choose_event_count(duration_s: float, density: str, sectional: bool) -> int:
     base = {"sparse": 24, "medium": 44, "dense": 74}[density]
     if sectional:
@@ -1877,6 +2053,13 @@ def safe_slice_fragment(audio: AudioSegment, min_ms: int, max_ms: int, frag_mul:
     frag_len = max(8, min(frag_len, audio_len))
     start = 0 if audio_len <= frag_len else random.randint(0, max(0, audio_len - frag_len))
     return audio[start : start + frag_len]
+
+
+def source_audio_for_sample(sample: SampleFile, args: argparse.Namespace) -> AudioSegment:
+    audio = AudioSegment.from_file(sample.path).set_frame_rate(args.sample_rate).set_channels(2)
+    if sample.has_cue():
+        return audio[sample.cue_start_ms : sample.cue_end_ms]
+    return audio
 
 
 def change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
@@ -2149,7 +2332,7 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
 
 def export_manifest(path: Path, events: List[Event]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["layer", "section", "source", "source_basename", "source_duration_ms", "start_ms", "end_ms", "fragment_duration_ms", "gain_db", "reversed", "speed", "repeated", "hp_hz", "lp_hz", "grain_mode", "from_memory", "transformation", "layer_role", "recurrence_index"])
+        writer = csv.DictWriter(f, fieldnames=["layer", "section", "source", "source_basename", "source_duration_ms", "source_cue_start_ms", "source_cue_end_ms", "source_cue_text", "start_ms", "end_ms", "fragment_duration_ms", "gain_db", "reversed", "speed", "repeated", "hp_hz", "lp_hz", "grain_mode", "from_memory", "transformation", "layer_role", "recurrence_index"])
         writer.writeheader()
         for e in events:
             writer.writerow(e.__dict__)
@@ -2254,8 +2437,11 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
         else:
             sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, local_args.concrete)
-            src = AudioSegment.from_file(sample.path).set_frame_rate(local_args.sample_rate).set_channels(2)
-            frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]), grid_ms=grid_ms)
+            src = source_audio_for_sample(sample, local_args)
+            if sample.has_cue() and str(getattr(local_args, "cue_slice_mode", "full")) == "full":
+                frag = src
+            else:
+                frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]), grid_ms=grid_ms)
             shaped, meta = shape_fragment(frag, profile, local_args)
             if grid_ms > 0:
                 meta = dict(meta)
@@ -2363,6 +2549,9 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 source=str(sample.path),
                 source_basename=sample.path.name,
                 source_duration_ms=sample.duration_ms,
+                source_cue_start_ms=sample.cue_start_ms,
+                source_cue_end_ms=sample.cue_end_ms,
+                source_cue_text=sample.cue_text,
                 start_ms=pos,
                 end_ms=pos + len(shaped),
                 fragment_duration_ms=len(shaped),
@@ -2462,12 +2651,19 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
     if not input_root.is_dir() and not input_root.is_file():
         raise SystemExit(f"--input must be an audio file or directory: {input_root}")
 
-    samples, unreadable = discover_samples(input_root)
+    if args.cue_file:
+        cue_path = Path(args.cue_file).expanduser().resolve()
+        samples, unreadable = discover_cue_samples(input_root, cue_path)
+    else:
+        samples, unreadable = discover_samples(input_root)
     if not samples:
         hint = f" ({unreadable} files could not be decoded)" if unreadable else ""
+        if args.cue_file:
+            raise SystemExit(f"No usable audio cue samples found from {Path(args.cue_file).expanduser().resolve()}{hint}")
         raise SystemExit(f"No usable audio samples found in {input_root}{hint}")
     if unreadable:
-        print(f"Warning: skipped {unreadable} unreadable audio file(s) while scanning {input_root}")
+        source = Path(args.cue_file).expanduser().resolve() if args.cue_file else input_root
+        print(f"Warning: skipped {unreadable} unusable audio/cue row(s) while scanning {source}")
 
     audio_out = output_root / "audio_cutups"
     audio_out.mkdir(parents=True, exist_ok=True)
