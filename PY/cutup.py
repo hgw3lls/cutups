@@ -22,11 +22,13 @@ import importlib.util
 import json
 import random
 import re
+import shutil
+import sys
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 AudioSegment: Any = None
 compress_dynamic_range: Any = None
@@ -39,9 +41,14 @@ def ensure_audio_backend() -> None:
     global AudioSegment, compress_dynamic_range, high_pass_filter, low_pass_filter
     if AudioSegment is not None:
         return
-    if importlib.util.find_spec("pydub") is None:
+    if "pydub" not in sys.modules and importlib.util.find_spec("pydub") is None:
         raise SystemExit(
-            "Audio backend unavailable: install 'pydub' (and ffmpeg) to use --mode audio/both/all."
+            "Audio backend unavailable: install 'pydub' to use --mode audio/both/all. "
+            "Try: python3 -m pip install -r requirements.txt"
+        )
+    if shutil.which("ffmpeg") is None and shutil.which("avconv") is None:
+        raise SystemExit(
+            "Audio backend unavailable: ffmpeg was not found on PATH. Install ffmpeg and rerun audio mode."
         )
     pydub = importlib.import_module("pydub")
     effects = importlib.import_module("pydub.effects")
@@ -57,6 +64,16 @@ def ensure_audio_backend() -> None:
 AUDIO_EXTS = {".wav", ".mp3", ".flac", ".aiff", ".ogg", ".m4a"}
 TOKEN_RE = re.compile(r"[A-Za-z']+")
 SECTION_NAMES = ("ENTRY", "BUILD", "PRESSURE", "COLLAPSE", "AFTERIMAGE")
+SECTION_PROGRESS = {
+    "ENTRY": 0.1,
+    "BUILD": 0.32,
+    "PRESSURE": 0.56,
+    "COLLAPSE": 0.76,
+    "AFTERIMAGE": 0.93,
+}
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_TOP300_CSV = SCRIPT_DIR / "transmissions_top300_sample_candidates.csv"
+DEFAULT_FULL_CSV = SCRIPT_DIR / "transmissions_full_subtitles.csv"
 
 TEXT_COLUMN_CANDIDATES = ["text", "subtitle", "line", "transcript", "content"]
 FILE_COLUMN_CANDIDATES = ["file", "filename", "source_file"]
@@ -68,6 +85,131 @@ DURATION_COLUMN_CANDIDATES = ["duration_sec", "duration", "dur"]
 SCORE_COLUMN_CANDIDATES = ["score", "rank_score", "weight"]
 LOOP_BIN_COLUMN_CANDIDATES = ["loop_bin", "loop", "size_bin"]
 INTENSITY_COLUMN_CANDIDATES = ["intensity", "level", "energy"]
+
+LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
+    "absurd_seriousness": (0.0, 1.0),
+    "text_chaos": (0.0, 1.5),
+    "rupture_prob": (0.0, 1.0),
+    "stutter_prob": (0.0, 1.0),
+    "recurrence_prob": (0.0, 0.95),
+    "ghost_prob": (0.0, 0.95),
+    "silence_prob": (0.0, 0.95),
+}
+
+PRESET_VALUES: Dict[str, Dict[str, object]] = {
+    "signal-breach": {
+        "description": "Glitchy corrupted-transmission interruptions, noise bed, hard cuts, and dropouts.",
+        "values": {
+            "density": "dense",
+            "sectional": True,
+            "concrete": True,
+            "bed_noise": True,
+            "arrangement_style": "collapse",
+            "memory_depth": 18,
+            "silence_prob": 0.42,
+            "recurrence_prob": 0.48,
+            "ghost_prob": 0.58,
+            "rupture_prob": 0.75,
+            "stutter_prob": 0.62,
+            "text_chaos": 1.0,
+            "absurd_seriousness": 0.78,
+            "min_frag": 0.025,
+            "max_frag": 0.75,
+        },
+    },
+    "spoken-word-cutup": {
+        "description": "Voice-first cutups with longer fragments and lower destruction for intelligibility.",
+        "values": {
+            "density": "medium",
+            "sectional": True,
+            "concrete": False,
+            "arrangement_style": "sequential",
+            "memory_depth": 12,
+            "silence_prob": 0.18,
+            "recurrence_prob": 0.32,
+            "ghost_prob": 0.18,
+            "rupture_prob": 0.28,
+            "stutter_prob": 0.2,
+            "text_chaos": 0.55,
+            "absurd_seriousness": 0.62,
+            "min_frag": 0.45,
+            "max_frag": 3.6,
+            "max_words_slogan": 14,
+        },
+    },
+    "beat-cutup": {
+        "description": "Short rhythmic slices, repeats, mutes, and memory-driven beat disruptions.",
+        "values": {
+            "density": "dense",
+            "sectional": False,
+            "concrete": True,
+            "arrangement_style": "swarm",
+            "memory_depth": 16,
+            "silence_prob": 0.24,
+            "recurrence_prob": 0.55,
+            "ghost_prob": 0.2,
+            "rupture_prob": 0.5,
+            "stutter_prob": 0.75,
+            "min_frag": 0.08,
+            "max_frag": 0.65,
+        },
+    },
+    "radio-intrusion": {
+        "description": "Filtered voice intrusions with hiss, ghosts, and unstable broadcast texture.",
+        "values": {
+            "density": "medium",
+            "sectional": True,
+            "concrete": True,
+            "bed_noise": True,
+            "arrangement_style": "swarm",
+            "memory_depth": 20,
+            "silence_prob": 0.33,
+            "recurrence_prob": 0.46,
+            "ghost_prob": 0.68,
+            "rupture_prob": 0.55,
+            "stutter_prob": 0.38,
+            "min_frag": 0.06,
+            "max_frag": 1.2,
+            "master_gain": -4.0,
+        },
+    },
+    "hard-stutter": {
+        "description": "Aggressive micro-fragment repetition, abrupt mutes, and collapse-forward pressure.",
+        "values": {
+            "density": "dense",
+            "sectional": True,
+            "concrete": True,
+            "arrangement_style": "collapse",
+            "memory_depth": 10,
+            "silence_prob": 0.3,
+            "recurrence_prob": 0.62,
+            "ghost_prob": 0.32,
+            "rupture_prob": 0.85,
+            "stutter_prob": 0.9,
+            "min_frag": 0.025,
+            "max_frag": 0.4,
+        },
+    },
+    "ghost-transmission": {
+        "description": "Faint recurring voices, afterimages, dead air, and memory echoes.",
+        "values": {
+            "density": "medium",
+            "sectional": True,
+            "concrete": False,
+            "bed_noise": True,
+            "arrangement_style": "collapse",
+            "memory_depth": 28,
+            "silence_prob": 0.38,
+            "recurrence_prob": 0.74,
+            "ghost_prob": 0.82,
+            "rupture_prob": 0.34,
+            "stutter_prob": 0.34,
+            "min_frag": 0.25,
+            "max_frag": 2.8,
+            "master_gain": -5.5,
+        },
+    },
+}
 
 KEYWORD_WEIGHTS: Dict[str, float] = {
     "official": 1.3,
@@ -286,30 +428,37 @@ class LiveControlState:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Political cut-up + speech concrete engine.")
+    p = argparse.ArgumentParser(
+        description="TRANSMISSIONS cut-up instrument for speech, beats, signal breaches, and agitprop text.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     p.add_argument("--mode", choices=["audio", "agitprop", "cuttargets", "both", "all"], default="audio")
     p.add_argument("--output", default="transmissions_cutups", help="Output root folder.")
     p.add_argument("--seed", type=int, default=7, help="Deterministic random seed.")
+    p.add_argument("--preset", choices=sorted(PRESET_VALUES), default="", help="Named TRANSMISSIONS recipe.")
+    p.add_argument("--list-presets", action="store_true", help="Print available TRANSMISSIONS presets and exit.")
+    p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
+    p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
 
-    p.add_argument("--input", help="Root folder containing audio samples (required for audio/both/all).")
+    p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
     p.add_argument("--duration", type=float, default=90.0, help="Composition duration in seconds.")
     p.add_argument("--variants", type=int, default=1, help="Number of rendered variants.")
     p.add_argument("--sample-rate", type=int, default=44100, help="Export sample rate.")
     p.add_argument("--master-gain", type=float, default=-3.0, help="Master gain in dB.")
-    p.add_argument("--bed-noise", action="store_true", help="Add synthetic hiss bed.")
+    p.add_argument("--bed-noise", action=argparse.BooleanOptionalAction, default=False, help="Add synthetic hiss bed.")
     p.add_argument("--min-frag", type=float, default=0.05, help="Minimum fragment size in seconds.")
     p.add_argument("--max-frag", type=float, default=4.2, help="Maximum fragment size in seconds.")
     p.add_argument("--density", choices=["sparse", "medium", "dense"], default="medium")
-    p.add_argument("--concrete", action="store_true", help="Bias toward harsher concrete transformations.")
-    p.add_argument("--sectional", action="store_true", help="Enable section-aware timeline behavior.")
+    p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
+    p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
     p.add_argument("--memory-depth", type=int, default=10, help="Rolling memory depth for ghost recurrence.")
     p.add_argument("--silence-prob", type=float, default=0.15, help="Probability of dead-air insertion.")
     p.add_argument("--recurrence-prob", type=float, default=0.28, help="Probability to reuse previous source memory.")
     p.add_argument("--ghost-prob", type=float, default=0.22, help="Probability to force ghost-layer behavior.")
 
-    p.add_argument("--top300-csv", default="transmissions_top300_sample_candidates.csv")
-    p.add_argument("--full-csv", default="transmissions_full_subtitles.csv")
+    p.add_argument("--top300-csv", default=str(DEFAULT_TOP300_CSV))
+    p.add_argument("--full-csv", default=str(DEFAULT_FULL_CSV))
     p.add_argument("--agitprop-count", type=int, default=40)
     p.add_argument("--broadcast-count", type=int, default=16)
     p.add_argument("--chant-count", type=int, default=120)
@@ -326,11 +475,50 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--live-control-poll-ms", type=int, default=250, help="Poll interval for live control file updates.")
     p.add_argument("--live-telemetry-jsonl", default="", help="Optional JSONL file for live control telemetry.")
 
-    return p.parse_args()
+    parsed = p.parse_args()
+    parsed._explicit_args = explicit_arg_dests(p, sys.argv[1:])
+    if parsed.list_presets:
+        print_presets()
+        raise SystemExit(0)
+    return parsed
+
+
+def explicit_arg_dests(parser: argparse.ArgumentParser, argv: Sequence[str]) -> Set[str]:
+    option_to_dest = {
+        option: action.dest
+        for action in parser._actions
+        for option in action.option_strings
+        if action.dest != argparse.SUPPRESS
+    }
+    explicit: Set[str] = set()
+    for raw in argv:
+        option = raw.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest:
+            explicit.add(dest)
+    return explicit
+
+
+def print_presets() -> None:
+    print("TRANSMISSIONS presets:")
+    for name in sorted(PRESET_VALUES):
+        print(f"  {name}: {PRESET_VALUES[name]['description']}")
+
+
+def apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.preset:
+        return args
+    explicit = getattr(args, "_explicit_args", set())
+    preset = PRESET_VALUES[args.preset]["values"]
+    for key, value in preset.items():
+        if key not in explicit:
+            setattr(args, key, value)
+    return args
 
 
 def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     """Validate and normalize CLI arguments with clear failure reasons."""
+    apply_preset(args)
     if args.variants < 1:
         raise SystemExit("--variants must be >= 1")
     if args.sample_rate < 8000:
@@ -367,6 +555,60 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
 
 def clamp(v: float, low: float, high: float) -> float:
     return max(low, min(high, v))
+
+
+def build_live_control(args: argparse.Namespace) -> Optional[LiveControlState]:
+    control_file = Path(args.live_control_file).expanduser().resolve() if args.live_control_file else None
+    telemetry_path = Path(args.live_telemetry_jsonl).expanduser().resolve() if args.live_telemetry_jsonl else None
+    if telemetry_path:
+        telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+    enabled = bool(control_file or telemetry_path)
+    return LiveControlState(
+        enabled=enabled,
+        control_file=control_file,
+        poll_ms=max(30, int(args.live_control_poll_ms)),
+        telemetry_path=telemetry_path,
+    )
+
+
+def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] = None) -> RuntimeParams:
+    if live and live.enabled:
+        live.poll()
+        values = {key: live.value(args, key) for key in LIVE_CONTROL_LIMITS}
+        return RuntimeParams(
+            absurd_seriousness=values["absurd_seriousness"],
+            text_chaos=values["text_chaos"],
+            rupture_prob=values["rupture_prob"],
+            stutter_prob=values["stutter_prob"],
+            recurrence_prob=values["recurrence_prob"],
+            ghost_prob=values["ghost_prob"],
+            silence_prob=values["silence_prob"],
+            force_section=live.section_override,
+            hold_section=live.hold_section,
+            burst_now=live.burst_now,
+            panic_silence=live.panic_silence,
+        )
+    return RuntimeParams(
+        absurd_seriousness=float(args.absurd_seriousness),
+        text_chaos=float(args.text_chaos),
+        rupture_prob=float(args.rupture_prob),
+        stutter_prob=float(args.stutter_prob),
+        recurrence_prob=float(args.recurrence_prob),
+        ghost_prob=float(args.ghost_prob),
+        silence_prob=float(args.silence_prob),
+    )
+
+
+def apply_runtime_params(args: argparse.Namespace, runtime: RuntimeParams) -> argparse.Namespace:
+    local_args = argparse.Namespace(**vars(args))
+    local_args.absurd_seriousness = runtime.absurd_seriousness
+    local_args.text_chaos = runtime.text_chaos
+    local_args.rupture_prob = runtime.rupture_prob
+    local_args.stutter_prob = runtime.stutter_prob
+    local_args.recurrence_prob = runtime.recurrence_prob
+    local_args.ghost_prob = runtime.ghost_prob
+    local_args.silence_prob = runtime.silence_prob
+    return local_args
 
 
 def clean_text(text: str) -> str:
@@ -417,6 +659,72 @@ def safe_int(value: str, default: int = 0) -> int:
 
 def cut_words(text: str) -> List[str]:
     return TOKEN_RE.findall(text)
+
+
+def candidate_audio_paths(root: Path) -> List[Path]:
+    if root.is_file():
+        return [root] if root.suffix.lower() in AUDIO_EXTS else []
+    if root.is_dir():
+        return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTS)
+    return []
+
+
+def is_nonempty_dir(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
+def unique_output_path(path: Path) -> Path:
+    if not path.exists() or not is_nonempty_dir(path):
+        return path
+    for idx in range(2, 1000):
+        candidate = path.with_name(f"{path.name}_{idx:02d}")
+        if not candidate.exists() or not is_nonempty_dir(candidate):
+            return candidate
+    raise SystemExit(f"Could not find an unused output folder near {path}")
+
+
+def resolve_output_root(raw_output: str, overwrite: bool) -> Path:
+    output_root = Path(raw_output).expanduser().resolve()
+    if output_root.exists() and not output_root.is_dir():
+        raise SystemExit(f"--output path exists and is not a directory: {output_root}")
+    if overwrite:
+        return output_root
+    safe_root = unique_output_path(output_root)
+    if safe_root != output_root:
+        print(f"Output folder exists and is non-empty; writing to: {safe_root}")
+    return safe_root
+
+
+def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
+    print("=== CUTUP DRY RUN ===")
+    print(f"mode: {args.mode}")
+    print(f"preset: {args.preset or 'none'}")
+    print(f"seed: {args.seed}")
+    print(f"output: {output_root}")
+    print(f"duration: {args.duration}s")
+    print(f"variants: {args.variants}")
+    print(f"density: {args.density}")
+    print(f"sectional: {args.sectional}")
+    print(f"arrangement_style: {args.arrangement_style}")
+    print(f"concrete: {args.concrete}")
+    print(f"bed_noise: {args.bed_noise}")
+    print(f"fragments: {args.min_frag:.3f}s..{args.max_frag:.3f}s")
+    print(f"pydub: {'ok' if ('pydub' in sys.modules or importlib.util.find_spec('pydub')) else 'missing'}")
+    print(f"ffmpeg: {shutil.which('ffmpeg') or shutil.which('avconv') or 'missing'}")
+    if args.mode in {"audio", "both", "all"}:
+        if args.input:
+            input_path = Path(args.input).expanduser().resolve()
+            candidates = candidate_audio_paths(input_path)
+            print(f"input: {input_path}")
+            print(f"audio candidates: {len(candidates)}")
+        else:
+            print("input: missing (--input is required for audio/both/all)")
+    if args.mode in {"agitprop", "cuttargets", "both", "all"}:
+        print(f"top300_csv: {Path(args.top300_csv).expanduser().resolve()}")
+        print(f"full_csv: {Path(args.full_csv).expanduser().resolve()}")
 
 
 # -------------------------------------------------------------------
@@ -1180,21 +1488,20 @@ def discover_samples(root: Path) -> Tuple[List[SampleFile], int]:
     ensure_audio_backend()
     samples: List[SampleFile] = []
     unreadable = 0
-    for path in root.rglob("*"):
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTS:
-            try:
-                audio = AudioSegment.from_file(path)
-            except Exception:
-                unreadable += 1
-                continue
-            if len(audio) <= 1:
-                continue
-            stem = path.stem.lower().replace("_", " ")
-            words = len(TOKEN_RE.findall(stem))
-            low = str(path).lower()
-            intensity = sum(1 for k in ["threat", "warning", "command", "official", "censor", "collapse"] if k in low)
-            loop_hint = 3 if "micro" in low else 2 if "short" in low else 1 if "phrase" in low else 0
-            samples.append(SampleFile(path=path, duration_ms=len(audio), words=words, intensity_hint=intensity, loop_hint=loop_hint))
+    for path in candidate_audio_paths(root):
+        try:
+            audio = AudioSegment.from_file(path)
+        except Exception:
+            unreadable += 1
+            continue
+        if len(audio) <= 1:
+            continue
+        stem = path.stem.lower().replace("_", " ")
+        words = len(TOKEN_RE.findall(stem))
+        low = str(path).lower()
+        intensity = sum(1 for k in ["threat", "warning", "command", "official", "censor", "collapse"] if k in low)
+        loop_hint = 3 if "micro" in low else 2 if "short" in low else 1 if "phrase" in low else 0
+        samples.append(SampleFile(path=path, duration_ms=len(audio), words=words, intensity_hint=intensity, loop_hint=loop_hint))
     return samples, unreadable
 
 
@@ -1427,7 +1734,7 @@ def build_section_score(events: List[Event]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
+def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int, live: Optional[LiveControlState] = None) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     ghosts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -1459,11 +1766,14 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
         progress = i / max(1, n_events - 1)
-        profile = section_profile(progress, args) if args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": args.silence_prob, "ghost": args.ghost_prob}
+        profile = section_profile(progress, local_args) if local_args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": local_args.silence_prob, "ghost": local_args.ghost_prob}
+        if runtime.force_section and (runtime.hold_section or runtime.burst_now):
+            profile = section_profile(SECTION_PROGRESS[runtime.force_section], local_args)
+            profile["name"] = runtime.force_section
 
         sec_name = str(profile["name"])
         sec_span = plan.get(sec_name, (0, total_ms))
-        memory_bias = args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
+        memory_bias = local_args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
         use_recurrence_fragment = bool(recurrence_memory and random.random() < clamp(memory_bias * (1.4 if sec_name in {"PRESSURE", "COLLAPSE"} else 1.0), 0.0, 0.97))
         from_memory = False
         if use_recurrence_fragment:
@@ -1478,15 +1788,15 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             meta = dict(meta)
             meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
         else:
-            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, args.concrete)
-            src = AudioSegment.from_file(sample.path).set_frame_rate(args.sample_rate).set_channels(2)
+            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, local_args.concrete)
+            src = AudioSegment.from_file(sample.path).set_frame_rate(local_args.sample_rate).set_channels(2)
             frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]))
-            shaped, meta = shape_fragment(frag, profile, args.concrete)
+            shaped, meta = shape_fragment(frag, profile, local_args.concrete)
         recurrence_count[str(sample.path)] = recurrence_count.get(str(sample.path), 0) + 1
 
         layer = random.choices(
             ["voice_main", "voice_cuts", "ghosts"],
-            weights=[3, 4, 4] if profile["name"] in {"COLLAPSE", "AFTERIMAGE"} else ([4, 3, 3] if args.arrangement_style == "swarm" else [5, 2, 2]),
+            weights=[3, 4, 4] if profile["name"] in {"COLLAPSE", "AFTERIMAGE"} else ([4, 3, 3] if local_args.arrangement_style == "swarm" else [5, 2, 2]),
             k=1,
         )[0]
         if random.random() < profile["ghost"]:
@@ -1533,7 +1843,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 placed = low_pass_filter(placed, random.choice([1600, 2200, 3000]))
             ghosts = ghosts.overlay(placed, position=pos)
 
-        if args.sectional and random.random() < (0.18 if sec_name not in {"COLLAPSE", "AFTERIMAGE"} else 0.3) and recurrence_count[str(sample.path)] > 1:
+        if local_args.sectional and random.random() < (0.18 if sec_name not in {"COLLAPSE", "AFTERIMAGE"} else 0.3) and recurrence_count[str(sample.path)] > 1:
             # ghost return: delayed, filtered recurrence of same material.
             back_pos = min(total_ms - 1, pos + random.randint(160, 2600))
             ghost_copy = low_pass_filter(shaped.reverse(), random.choice([1200, 1800, 2400])).apply_gain(random.uniform(-15, -9))
@@ -1653,9 +1963,9 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
         raise SystemExit("--input is required for --mode audio, --mode both, and --mode all")
     input_root = Path(args.input).expanduser().resolve()
     if not input_root.exists():
-        raise SystemExit(f"Input folder not found: {input_root}")
-    if not input_root.is_dir():
-        raise SystemExit(f"--input must be a directory: {input_root}")
+        raise SystemExit(f"Input path not found: {input_root}")
+    if not input_root.is_dir() and not input_root.is_file():
+        raise SystemExit(f"--input must be an audio file or directory: {input_root}")
 
     samples, unreadable = discover_samples(input_root)
     if not samples:
@@ -1720,9 +2030,10 @@ def main() -> None:
     random.seed(args.seed)
     live = build_live_control(args)
 
-    output_root = Path(args.output).expanduser().resolve()
-    if output_root.exists() and not output_root.is_dir():
-        raise SystemExit(f"--output path exists and is not a directory: {output_root}")
+    output_root = resolve_output_root(args.output, args.overwrite)
+    if args.dry_run:
+        print_dry_run(args, output_root)
+        return
     try:
         output_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

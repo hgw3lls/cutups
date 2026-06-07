@@ -21,7 +21,13 @@ The main entry point is:
 Install Python dependency:
 
 ```bash
-python -m pip install pydub
+python3 -m pip install -r requirements.txt
+```
+
+For tests:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
 ```
 
 ---
@@ -31,12 +37,35 @@ python -m pip install pydub
 From repo root:
 
 ```bash
-python PY/cutup.py --mode agitprop --output out/demo_text
+python3 PY/cutup.py --mode agitprop --output out/demo_text
 ```
 
 ```bash
-python PY/cutup.py --mode audio --input ./samples --output out/demo_audio
+python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --output out/demo_audio
 ```
+
+List TRANSMISSIONS presets:
+
+```bash
+python3 PY/cutup.py --list-presets
+```
+
+Check a render setup without writing audio:
+
+```bash
+python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --output out/preview --dry-run
+```
+
+See [TRANSMISSIONS_QUICKSTART.md](TRANSMISSIONS_QUICKSTART.md) for signal-breach, spoken-word, beat-cutup, radio-intrusion, hard-stutter, and ghost-transmission recipes.
+
+Available preset names:
+
+- `signal-breach`
+- `spoken-word-cutup`
+- `beat-cutup`
+- `radio-intrusion`
+- `hard-stutter`
+- `ghost-transmission`
 
 ---
 
@@ -254,6 +283,8 @@ Inside your `--output` directory you will usually see:
 - `audio_cutups/cutup_XX/cutup_XX_score.txt`
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
 
+If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
+
 ---
 
 ## Reproducibility tips
@@ -361,7 +392,7 @@ Notes:
 Install:
 
 ```bash
-python -m pip install pydub
+python3 -m pip install -r requirements.txt
 ```
 
 ### Audio decoding/export issues

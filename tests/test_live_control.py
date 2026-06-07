@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -48,6 +50,45 @@ class LiveControlTests(unittest.TestCase):
         runtime = cutup.runtime_snapshot(args, live=None)
         self.assertEqual(runtime.absurd_seriousness, 0.2)
         self.assertEqual(runtime.ghost_prob, 0.7)
+
+    def test_apply_preset_keeps_explicit_cli_values(self) -> None:
+        args = types.SimpleNamespace(
+            preset="signal-breach",
+            _explicit_args={"density", "bed_noise"},
+            density="sparse",
+            concrete=False,
+            bed_noise=False,
+            min_frag=0.05,
+            max_frag=4.2,
+        )
+        cutup.apply_preset(args)
+        self.assertEqual(args.density, "sparse")
+        self.assertTrue(args.concrete)
+        self.assertFalse(args.bed_noise)
+        self.assertEqual(args.min_frag, 0.025)
+
+    def test_candidate_audio_paths_accepts_single_audio_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            audio_path = Path(td) / "voice.wav"
+            audio_path.write_bytes(b"not real wav but good enough for suffix discovery")
+            self.assertEqual(cutup.candidate_audio_paths(audio_path), [audio_path])
+
+    def test_resolve_output_root_avoids_nonempty_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "render"
+            out.mkdir()
+            (out / "existing.txt").write_text("keep me", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                resolved = cutup.resolve_output_root(str(out), overwrite=False)
+            self.assertEqual(resolved, (Path(td) / "render_02").resolve())
+            self.assertEqual((out / "existing.txt").read_text(encoding="utf-8"), "keep me")
+
+    def test_resolve_output_root_honors_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "render"
+            out.mkdir()
+            (out / "existing.txt").write_text("keep me", encoding="utf-8")
+            self.assertEqual(cutup.resolve_output_root(str(out), overwrite=True), out.resolve())
 
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
