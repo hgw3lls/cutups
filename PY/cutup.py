@@ -50,8 +50,16 @@ def ensure_audio_backend() -> None:
         raise SystemExit(
             "Audio backend unavailable: ffmpeg was not found on PATH. Install ffmpeg and rerun audio mode."
         )
-    pydub = importlib.import_module("pydub")
-    effects = importlib.import_module("pydub.effects")
+    try:
+        pydub = importlib.import_module("pydub")
+        effects = importlib.import_module("pydub.effects")
+    except ModuleNotFoundError as exc:
+        if exc.name in {"audioop", "pyaudioop"}:
+            raise SystemExit(
+                "Audio backend unavailable: pydub needs 'audioop-lts' on Python 3.13+. "
+                "Try: python3 -m pip install -r requirements.txt"
+            ) from exc
+        raise
     AudioSegment = pydub.AudioSegment
     compress_dynamic_range = effects.compress_dynamic_range
     high_pass_filter = effects.high_pass_filter
