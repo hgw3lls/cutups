@@ -70,17 +70,21 @@ python3 PY/cutup.py \
 
 ## Beat Cutup
 
-Use known-tempo loops or rhythmic material. This first pass does not do BPM detection; keep source loops trimmed before rendering.
+Use known-tempo loops or rhythmic material. This first pass does not do BPM detection; pass the tempo manually and choose a slice grid.
 
 ```bash
 python3 PY/cutup.py \
   --mode audio \
   --preset beat-cutup \
   --input ./loops \
+  --bpm 120 \
+  --slice-grid 1/16 \
   --output out/beat_cutup \
   --duration 45 \
   --seed 23
 ```
+
+Useful grid values: `1/4`, `1/8`, `1/16`, `1/32`, `1/8t`, `1/16t`. Grid mode quantizes source slice lengths and event starts, while repeats, ghosts, reversals, and gaps can still disrupt the loop.
 
 ## Radio Intrusion
 

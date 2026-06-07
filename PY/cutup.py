@@ -79,6 +79,15 @@ SECTION_PROGRESS = {
     "COLLAPSE": 0.76,
     "AFTERIMAGE": 0.93,
 }
+SLICE_GRID_FACTORS: Dict[str, float] = {
+    "off": 0.0,
+    "1/4": 1.0,
+    "1/8": 0.5,
+    "1/16": 0.25,
+    "1/32": 0.125,
+    "1/8t": 1.0 / 3.0,
+    "1/16t": 1.0 / 6.0,
+}
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_TOP300_CSV = SCRIPT_DIR / "transmissions_top300_sample_candidates.csv"
 DEFAULT_FULL_CSV = SCRIPT_DIR / "transmissions_full_subtitles.csv"
@@ -160,6 +169,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "stutter_prob": 0.75,
             "min_frag": 0.08,
             "max_frag": 0.65,
+            "slice_grid": "1/16",
         },
     },
     "radio-intrusion": {
@@ -460,6 +470,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
+    p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
+    p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
     p.add_argument("--memory-depth", type=int, default=10, help="Rolling memory depth for ghost recurrence.")
     p.add_argument("--silence-prob", type=float, default=0.15, help="Probability of dead-air insertion.")
     p.add_argument("--recurrence-prob", type=float, default=0.28, help="Probability to reuse previous source memory.")
@@ -533,6 +545,12 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--sample-rate must be >= 8000")
     if args.duration <= 0:
         raise SystemExit("--duration must be > 0")
+    if args.bpm < 0:
+        raise SystemExit("--bpm must be >= 0")
+    if args.bpm and not 20 <= args.bpm <= 300:
+        raise SystemExit("--bpm must be 20..300, or 0 to disable beat-grid behavior")
+    if args.bpm <= 0 and args.slice_grid != "off" and "slice_grid" in getattr(args, "_explicit_args", set()):
+        raise SystemExit("--slice-grid requires --bpm")
     if args.memory_depth < 1:
         raise SystemExit("--memory-depth must be >= 1")
     if args.cut_match_count < 1:
@@ -669,6 +687,34 @@ def cut_words(text: str) -> List[str]:
     return TOKEN_RE.findall(text)
 
 
+def beat_grid_ms(args: argparse.Namespace) -> int:
+    bpm = float(getattr(args, "bpm", 0.0) or 0.0)
+    grid = str(getattr(args, "slice_grid", "off") or "off")
+    factor = SLICE_GRID_FACTORS.get(grid, 0.0)
+    if bpm <= 0 or factor <= 0:
+        return 0
+    return max(8, int(round((60000.0 / bpm) * factor)))
+
+
+def quantize_to_grid(value_ms: int, grid_ms: int) -> int:
+    if grid_ms <= 0:
+        return int(value_ms)
+    return max(0, int(round(value_ms / grid_ms) * grid_ms))
+
+
+def grid_fragment_length(audio_len: int, min_ms: int, max_ms: int, frag_mul: float, grid_ms: int) -> int:
+    local_min = max(8, int(min_ms * frag_mul))
+    local_max = max(local_min, int(max_ms * frag_mul))
+    upper = min(audio_len, local_max)
+    if upper <= 0:
+        return max(8, min(audio_len, grid_ms))
+    candidates = [grid_ms * mult for mult in (1, 2, 3, 4, 6, 8) if local_min <= grid_ms * mult <= upper]
+    if not candidates:
+        snapped = quantize_to_grid(local_min, grid_ms)
+        candidates = [max(8, min(audio_len, upper, snapped or grid_ms))]
+    return max(8, min(audio_len, random.choice(candidates)))
+
+
 def candidate_audio_paths(root: Path) -> List[Path]:
     if root.is_file():
         return [root] if root.suffix.lower() in AUDIO_EXTS else []
@@ -720,6 +766,11 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"concrete: {args.concrete}")
     print(f"bed_noise: {args.bed_noise}")
     print(f"fragments: {args.min_frag:.3f}s..{args.max_frag:.3f}s")
+    grid_ms = beat_grid_ms(args)
+    if grid_ms > 0:
+        print(f"beat_grid: {args.bpm:g} bpm {args.slice_grid} ({grid_ms} ms)")
+    else:
+        print(f"beat_grid: inactive (bpm={args.bpm:g}, slice_grid={args.slice_grid})")
     print(f"pydub: {'ok' if ('pydub' in sys.modules or importlib.util.find_spec('pydub')) else 'missing'}")
     print(f"ffmpeg: {shutil.which('ffmpeg') or shutil.which('avconv') or 'missing'}")
     if args.mode in {"audio", "both", "all"}:
@@ -1550,9 +1601,14 @@ def section_plan(total_ms: int) -> Dict[str, Tuple[int, int]]:
     return {name: (marks[i], marks[i + 1]) for i, name in enumerate(names)}
 
 
-def clamp_to_section(position_ms: int, span: Tuple[int, int], frag_len: int) -> int:
+def clamp_to_section(position_ms: int, span: Tuple[int, int], frag_len: int, grid_ms: int = 0) -> int:
     start, end = span
     room_end = max(start, end - max(10, frag_len + 4))
+    if grid_ms > 0:
+        lower = ((start + grid_ms - 1) // grid_ms) * grid_ms
+        upper = (room_end // grid_ms) * grid_ms
+        if lower <= upper:
+            return int(clamp(quantize_to_grid(position_ms, grid_ms), lower, upper))
     return int(clamp(position_ms, start, room_end))
 
 
@@ -1578,10 +1634,20 @@ def command_cell_swarm(audio: AudioSegment, profile: Dict[str, float]) -> Tuple[
     return swarm, True
 
 
-def safe_slice_fragment(audio: AudioSegment, min_ms: int, max_ms: int, frag_mul: float) -> AudioSegment:
+def safe_slice_fragment(audio: AudioSegment, min_ms: int, max_ms: int, frag_mul: float, grid_ms: int = 0) -> AudioSegment:
     audio_len = len(audio)
     if audio_len <= 1:
         return AudioSegment.silent(duration=30, frame_rate=audio.frame_rate)
+    if grid_ms > 0:
+        frag_len = grid_fragment_length(audio_len, min_ms, max_ms, frag_mul, grid_ms)
+        max_start = max(0, audio_len - frag_len)
+        if max_start <= 0:
+            start = 0
+        else:
+            grid_starts = list(range(0, max_start + 1, grid_ms))
+            start = random.choice(grid_starts) if grid_starts else quantize_to_grid(random.randint(0, max_start), grid_ms)
+            start = min(max_start, start)
+        return audio[start : start + frag_len]
     local_min = max(15, int(min_ms * frag_mul))
     local_max = max(local_min, int(max_ms * frag_mul))
     upper = min(audio_len, local_max)
@@ -1751,6 +1817,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
     recurrence_memory: Deque[Tuple[SampleFile, AudioSegment, Dict[str, object], str]] = deque(maxlen=max(3, args.memory_depth * 2))
     recurrence_count: Dict[str, int] = {}
     plan = section_plan(total_ms)
+    grid_ms = beat_grid_ms(args)
 
     n_events = choose_event_count(total_ms / 1000.0, args.density, args.sectional)
     current_anchor = 0
@@ -1798,8 +1865,11 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         else:
             sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, local_args.concrete)
             src = AudioSegment.from_file(sample.path).set_frame_rate(local_args.sample_rate).set_channels(2)
-            frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]))
+            frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]), grid_ms=grid_ms)
             shaped, meta = shape_fragment(frag, profile, local_args.concrete)
+            if grid_ms > 0:
+                meta = dict(meta)
+                meta["transformation"] = f"{meta.get('transformation', 'slice')}+grid"
         recurrence_count[str(sample.path)] = recurrence_count.get(str(sample.path), 0) + 1
 
         layer = random.choices(
@@ -1813,25 +1883,37 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             layer = "ghosts"
 
         if local_args.arrangement_style == "collapse":
-            jitter = random.randint(-120, 520)
-            step = max(40, int((900 if profile["name"] == "PRESSURE" else 1300) * float(profile["dens"])))
+            if grid_ms > 0:
+                jitter = grid_ms * random.choice([-1, 0, 0, 1])
+                step = grid_ms * random.choice([1, 1, 2, 3, 4])
+            else:
+                jitter = random.randint(-120, 520)
+                step = max(40, int((900 if profile["name"] == "PRESSURE" else 1300) * float(profile["dens"])))
         else:
-            jitter = random.randint(-300, 820)
-            step = max(70, int(random.randint(350, 2200) / max(0.4, float(profile["dens"]))))
+            if grid_ms > 0:
+                jitter = grid_ms * random.choice([-2, -1, 0, 0, 1, 2])
+                step = grid_ms * random.choice([1, 2, 2, 4, 8])
+            else:
+                jitter = random.randint(-300, 820)
+                step = max(70, int(random.randint(350, 2200) / max(0.4, float(profile["dens"]))))
 
         pos = random.randint(0, 500) if i == 0 else max(0, current_anchor + jitter)
-        pos = clamp_to_section(pos, sec_span, len(shaped))
+        if grid_ms > 0:
+            pos = quantize_to_grid(pos, grid_ms)
+        pos = clamp_to_section(pos, sec_span, len(shaped), grid_ms=grid_ms)
         if in_dead_air(pos):
             # honor silence windows as structural punctuation.
             move = random.randint(220, 1400)
             if sec_name in {"COLLAPSE", "AFTERIMAGE"} and random.random() < 0.6:
-                pos = clamp_to_section(max(0, pos - move // 2), sec_span, len(shaped))
+                pos = clamp_to_section(max(0, pos - move // 2), sec_span, len(shaped), grid_ms=grid_ms)
             else:
-                pos = clamp_to_section(min(total_ms - 1, pos + move), sec_span, len(shaped))
+                pos = clamp_to_section(min(total_ms - 1, pos + move), sec_span, len(shaped), grid_ms=grid_ms)
 
         if pos + len(shaped) >= total_ms:
             pos = max(0, total_ms - len(shaped) - random.randint(10, 220))
-        pos = clamp_to_section(pos, sec_span, len(shaped))
+        if grid_ms > 0:
+            pos = quantize_to_grid(pos, grid_ms)
+        pos = clamp_to_section(pos, sec_span, len(shaped), grid_ms=grid_ms)
         current_anchor = min(total_ms - 50, pos + step)
 
         if runtime.panic_silence and random.random() < 0.55:

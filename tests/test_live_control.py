@@ -67,6 +67,26 @@ class LiveControlTests(unittest.TestCase):
         self.assertFalse(args.bed_noise)
         self.assertEqual(args.min_frag, 0.025)
 
+    def test_beat_cutup_preset_sets_slice_grid(self) -> None:
+        args = types.SimpleNamespace(preset="beat-cutup", _explicit_args=set(), slice_grid="off")
+        cutup.apply_preset(args)
+        self.assertEqual(args.slice_grid, "1/16")
+
+    def test_beat_grid_ms_uses_manual_bpm_and_grid(self) -> None:
+        args = types.SimpleNamespace(bpm=120.0, slice_grid="1/16")
+        self.assertEqual(cutup.beat_grid_ms(args), 125)
+
+    def test_beat_grid_ms_inactive_without_bpm(self) -> None:
+        args = types.SimpleNamespace(bpm=0.0, slice_grid="1/16")
+        self.assertEqual(cutup.beat_grid_ms(args), 0)
+
+    def test_quantize_to_grid(self) -> None:
+        self.assertEqual(cutup.quantize_to_grid(188, 125), 250)
+        self.assertEqual(cutup.quantize_to_grid(187, 125), 125)
+
+    def test_clamp_to_section_preserves_grid_when_possible(self) -> None:
+        self.assertEqual(cutup.clamp_to_section(4870, (0, 5000), 700, grid_ms=125), 4250)
+
     def test_candidate_audio_paths_accepts_single_audio_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             audio_path = Path(td) / "voice.wav"

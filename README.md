@@ -67,6 +67,12 @@ Available preset names:
 - `hard-stutter`
 - `ghost-transmission`
 
+Beat-oriented cutups can use manual grid slicing:
+
+```bash
+python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --output out/beat_demo
+```
+
 ---
 
 ## Command-line examples (broad coverage)
