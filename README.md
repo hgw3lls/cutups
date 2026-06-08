@@ -145,6 +145,8 @@ python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav 
 
 Use `--source-diversity 0.0..1.0` to penalize immediate and repeated source reuse. TRANSMISSIONS presets set conservative defaults, and higher values are useful when a larger dataset is collapsing onto one dominant file.
 
+Use `--source-score off|spoken|beat|breach` to bias source choice toward the material a workflow needs before placement. Presets enable this automatically: spoken-word favors cue/phrase-like sources, beat cutups favor loop/grid material, and breach presets favor noise, radio, static, dropout, or high-intensity sources.
+
 Use `--section-arc classic|spoken|breach|pulse|ghost` with `--sectional` to choose the render's energy curve. Presets set workflow-specific arcs, and each `cutup_XX_plan.json` records the selected arc plus per-section target probabilities.
 
 Use subtitle or cue files to cut on phrase boundaries:

@@ -104,7 +104,7 @@ Listening notes:
 - `beat_disruptive` should produce more obvious source contrast and interruption.
 - Grid timing should still feel locked to the supplied BPM.
 - `cutup_01_events.csv` should show source changes and grid-aligned start positions.
-- `cutup_01_plan.json` should summarize section counts, top sources, transform tags, grid settings, `source_diversity`, `section_arc`, and per-section `section_targets`.
+- `cutup_01_plan.json` should summarize section counts, top sources, transform tags, grid settings, `source_score`, `source_diversity`, `section_arc`, and per-section `section_targets`.
 
 ## Beat Damage
 

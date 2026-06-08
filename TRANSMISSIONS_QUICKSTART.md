@@ -204,6 +204,10 @@ Beat controls only act when the grid is active:
 
 Use `--source-diversity 0.0..1.0` when a render overuses one file from a larger dataset. TRANSMISSIONS presets set conservative defaults; higher values push non-memory source choices toward less-used and less-recent files while still allowing intentional recurrence.
 
+## Source Scoring
+
+Use `--source-score off|spoken|beat|breach` to bias which source is selected before slicing and placement. This uses local metadata only: duration, cue word counts, cue text, file names, intensity hints, loop hints, and the current section. Presets enable the appropriate mode automatically, and `--source-score off` restores unscored source weighting.
+
 ## Section Arcs
 
 Use `--section-arc classic|spoken|breach|pulse|ghost` with `--sectional` to choose the composition curve across ENTRY, BUILD, PRESSURE, COLLAPSE, and AFTERIMAGE. Presets choose an arc automatically; override it when you want a spoken-word render to breach harder, or a signal render to hold back.

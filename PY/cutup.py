@@ -88,6 +88,10 @@ SECTION_PROGRESS = {
 }
 SECTION_ARCS = ("classic", "spoken", "breach", "pulse", "ghost")
 SECTION_PROFILE_KEYS = ("dens", "frag_mul", "repeat", "reverse", "filt", "silence", "ghost")
+SOURCE_SCORE_MODES = ("off", "spoken", "beat", "breach")
+SPOKEN_SOURCE_KEYWORDS = ("voice", "speech", "spoken", "phrase", "dialog", "dialogue", "interview", "reading", "narration")
+BEAT_SOURCE_KEYWORDS = ("beat", "loop", "drum", "kick", "snare", "hat", "bass", "perc", "pulse", "groove", "rhythm")
+BREACH_SOURCE_KEYWORDS = ("noise", "static", "radio", "scan", "dropout", "glitch", "burst", "carrier", "corrupt", "warning", "collapse")
 SECTION_ARC_MODIFIERS: Dict[str, Dict[str, Dict[str, float]]] = {
     "classic": {},
     "spoken": {
@@ -219,6 +223,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "dense",
             "sectional": True,
             "section_arc": "breach",
+            "source_score": "breach",
             "concrete": True,
             "bed_noise": True,
             "arrangement_style": "collapse",
@@ -245,6 +250,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "medium",
             "sectional": True,
             "section_arc": "spoken",
+            "source_score": "spoken",
             "concrete": False,
             "arrangement_style": "sequential",
             "memory_depth": 12,
@@ -271,6 +277,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "dense",
             "sectional": False,
             "section_arc": "pulse",
+            "source_score": "beat",
             "concrete": True,
             "arrangement_style": "swarm",
             "memory_depth": 16,
@@ -295,6 +302,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "medium",
             "sectional": True,
             "section_arc": "ghost",
+            "source_score": "breach",
             "concrete": True,
             "bed_noise": True,
             "arrangement_style": "swarm",
@@ -319,6 +327,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "dense",
             "sectional": True,
             "section_arc": "pulse",
+            "source_score": "beat",
             "concrete": True,
             "arrangement_style": "collapse",
             "memory_depth": 10,
@@ -344,6 +353,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "medium",
             "sectional": True,
             "section_arc": "ghost",
+            "source_score": "spoken",
             "concrete": False,
             "bed_noise": True,
             "arrangement_style": "collapse",
@@ -778,6 +788,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
     p.add_argument("--section-arc", choices=SECTION_ARCS, default="classic", help="Named section energy curve used when --sectional is active.")
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
+    p.add_argument("--source-score", choices=SOURCE_SCORE_MODES, default="off", help="Material-aware source weighting before placement.")
     p.add_argument("--source-diversity", type=float, default=0.0, help="Source balancing 0..1; higher values penalize immediate and repeated source reuse.")
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
@@ -1595,6 +1606,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"sectional: {args.sectional}")
     print(f"section_arc: {args.section_arc}")
     print(f"arrangement_style: {args.arrangement_style}")
+    print(f"source_score: {source_score_mode(args)}")
     print(f"source_diversity: {args.source_diversity:.2f}")
     print(f"concrete: {args.concrete}")
     print(f"bed_noise: {args.bed_noise}")
@@ -2877,6 +2889,61 @@ def base_source_weight(sample: SampleFile, concrete: bool) -> float:
     return max(0.1, dur_bonus + word_bonus + sample.intensity_hint + sample.loop_hint)
 
 
+def source_score_mode(args: argparse.Namespace) -> str:
+    mode = str(getattr(args, "source_score", "off") or "off")
+    return mode if mode in SOURCE_SCORE_MODES else "off"
+
+
+def source_text_blob(sample: SampleFile) -> str:
+    return f"{sample.path.stem} {sample.path.parent.name} {sample.cue_text}".lower()
+
+
+def keyword_hits(text: str, keywords: Sequence[str]) -> int:
+    return sum(1 for keyword in keywords if keyword in text)
+
+
+def source_material_score(
+    sample: SampleFile,
+    args: argparse.Namespace,
+    profile: Optional[Dict[str, float]] = None,
+) -> float:
+    mode = source_score_mode(args)
+    if mode == "off":
+        return 1.0
+
+    dur_s = max(0.001, sample.duration_ms / 1000.0)
+    words = max(0, int(sample.words))
+    text = source_text_blob(sample)
+    section = str((profile or {}).get("name", ""))
+
+    if mode == "spoken":
+        duration_fit = 1.35 if 0.65 <= dur_s <= 5.8 else 1.0 if 0.35 <= dur_s <= 8.0 else 0.52
+        word_fit = 1.3 if 3 <= words <= 18 else 0.95 if 1 <= words <= 28 else 0.55
+        cue_bonus = 1.18 if sample.has_cue() else 1.0
+        name_bonus = 1.0 + min(3, keyword_hits(text, SPOKEN_SOURCE_KEYWORDS)) * 0.08
+        pressure_penalty = 0.9 if section in {"PRESSURE", "COLLAPSE"} and dur_s > 6.0 else 1.0
+        return clamp(duration_fit * word_fit * cue_bonus * name_bonus * pressure_penalty, 0.2, 3.2)
+
+    if mode == "beat":
+        grid_ms = beat_grid_ms(args)
+        duration_fit = 1.22 if dur_s >= 0.45 else 0.85
+        grid_fit = 1.16 if grid_ms > 0 and sample.duration_ms >= grid_ms * 2 else 1.0
+        loop_bonus = 1.0 + min(4, sample.loop_hint) * 0.12
+        name_bonus = 1.0 + min(5, keyword_hits(text, BEAT_SOURCE_KEYWORDS)) * 0.12
+        speech_penalty = 0.82 if sample.has_cue() and words > 12 else 1.0
+        return clamp(duration_fit * grid_fit * loop_bonus * name_bonus * speech_penalty, 0.25, 3.5)
+
+    if mode == "breach":
+        hit_bonus = 1.0 + min(5, keyword_hits(text, BREACH_SOURCE_KEYWORDS)) * 0.16
+        intensity_bonus = 1.0 + min(5, sample.intensity_hint) * 0.18
+        duration_fit = 1.22 if dur_s <= 2.4 else 1.0 if dur_s <= 6.5 else 0.78
+        pressure_bonus = 1.18 if section in {"PRESSURE", "COLLAPSE"} else 1.0
+        concrete_bonus = 1.08 if bool(getattr(args, "concrete", False)) else 1.0
+        return clamp(hit_bonus * intensity_bonus * duration_fit * pressure_bonus * concrete_bonus, 0.25, 3.8)
+
+    return 1.0
+
+
 def source_diversity_multiplier(
     sample: SampleFile,
     args: argparse.Namespace,
@@ -2905,11 +2972,13 @@ def weighted_choice(
     source_counts: Optional[Counter] = None,
     recent_source_keys: Optional[Sequence[str]] = None,
     previous_sample: Optional[SampleFile] = None,
+    profile: Optional[Dict[str, float]] = None,
 ) -> SampleFile:
     weights = []
     for sample in samples:
         weight = base_source_weight(sample, concrete)
         if args is not None:
+            weight *= source_material_score(sample, args, profile=profile)
             weight *= source_diversity_multiplier(
                 sample,
                 args,
@@ -2927,6 +2996,7 @@ def choose_similarity_neighbor(
     source_counts: Optional[Counter] = None,
     recent_source_keys: Optional[Sequence[str]] = None,
     previous_sample: Optional[SampleFile] = None,
+    profile: Optional[Dict[str, float]] = None,
 ) -> SampleFile:
     novelty = clamp(float(getattr(args, "beat_novelty", 0.0)), 0.0, 1.0)
     pool_size = max(1, min(len(candidates), 3 + int(round(novelty * max(0, len(candidates) - 3)))))
@@ -2941,6 +3011,7 @@ def choose_similarity_neighbor(
             max(
                 0.01,
                 novelty_weight
+                * source_material_score(sample, args, profile=profile)
                 * source_diversity_multiplier(
                     sample,
                     args,
@@ -2961,6 +3032,7 @@ def choose_source_sample(
     previous_sample: Optional[SampleFile] = None,
     source_counts: Optional[Counter] = None,
     recent_source_keys: Optional[Sequence[str]] = None,
+    profile: Optional[Dict[str, float]] = None,
 ) -> SampleFile:
     if beat_jump and beat_jump.active and previous_sample is not None:
         similarity_weight = clamp(float(getattr(args, "beat_similarity_weight", 1.0)), 0.0, 1.0)
@@ -2973,6 +3045,7 @@ def choose_source_sample(
                 source_counts=source_counts,
                 recent_source_keys=recent_source_keys,
                 previous_sample=previous_sample,
+                profile=profile,
             )
         source_key = analysis_cache_key_for_sample(previous_sample, args)
         neighbor_keys = beat_jump.neighbor_keys.get(source_key, [])
@@ -2985,6 +3058,7 @@ def choose_source_sample(
                 source_counts=source_counts,
                 recent_source_keys=recent_source_keys,
                 previous_sample=previous_sample,
+                profile=profile,
             )
         beat_jump.fallbacks += 1
     elif beat_jump and beat_jump.active:
@@ -2996,6 +3070,7 @@ def choose_source_sample(
         source_counts=source_counts,
         recent_source_keys=recent_source_keys,
         previous_sample=previous_sample,
+        profile=profile,
     )
 
 
@@ -3508,6 +3583,7 @@ def build_audio_plan(
             "sectional": bool(args.sectional),
             "section_arc": section_arc_name(args),
             "arrangement_style": str(args.arrangement_style),
+            "source_score": source_score_mode(args),
             "source_diversity": float(args.source_diversity),
             "concrete": bool(args.concrete),
             "bed_noise": bool(args.bed_noise),
@@ -3659,6 +3735,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                     previous_sample=previous_source_sample,
                     source_counts=source_counts,
                     recent_source_keys=list(recent_source_keys),
+                    profile=profile,
                 )
             )
             src = source_audio_for_sample(sample, local_args)

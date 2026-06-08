@@ -174,6 +174,7 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["duration_ms"], 3000)
             self.assertEqual(render_plan["config"]["beat_grid_ms"], 125)
             self.assertEqual(render_plan["config"]["section_arc"], "pulse")
+            self.assertEqual(render_plan["config"]["source_score"], "beat")
             self.assertEqual(render_plan["config"]["source_diversity"], 0.35)
             self.assertEqual(render_plan["config"]["beat_novelty"], 0.4)
             self.assertEqual(render_plan["summary"]["event_count"], len(rows))

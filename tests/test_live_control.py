@@ -114,6 +114,7 @@ class LiveControlTests(unittest.TestCase):
             sectional=True,
             section_arc="spoken",
             arrangement_style="sequential",
+            source_score="spoken",
             source_diversity=0.65,
             concrete=False,
             bed_noise=False,
@@ -132,6 +133,7 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["cue_event_count"], 1)
         self.assertEqual(plan["config"]["beat_grid_ms"], 125)
         self.assertEqual(plan["config"]["section_arc"], "spoken")
+        self.assertEqual(plan["config"]["source_score"], "spoken")
         self.assertEqual(plan["config"]["source_diversity"], 0.65)
         self.assertEqual(plan["events"][0]["transform_tags"], ["slice", "grid"])
         self.assertEqual(len(plan["section_windows"]), 5)
@@ -247,6 +249,7 @@ class LiveControlTests(unittest.TestCase):
         cutup.apply_preset(args)
         self.assertEqual(args.slice_grid, "1/16")
         self.assertEqual(args.section_arc, "pulse")
+        self.assertEqual(args.source_score, "beat")
         self.assertEqual(args.stutter_rate, 0.48)
         self.assertEqual(args.mute_rate, 0.18)
         self.assertEqual(args.repeat_rate, 0.38)
@@ -272,6 +275,7 @@ class LiveControlTests(unittest.TestCase):
         cutup.apply_preset(args)
         self.assertEqual(args.phrase_length, "medium")
         self.assertEqual(args.section_arc, "spoken")
+        self.assertEqual(args.source_score, "spoken")
         self.assertEqual(args.intelligibility, "high")
         self.assertEqual(args.interruption_density, "low")
         self.assertEqual(args.silence_insert_ms, "120:420")
@@ -288,6 +292,7 @@ class LiveControlTests(unittest.TestCase):
         cutup.apply_preset(args)
         self.assertEqual(args.burst_rate, 0.58)
         self.assertEqual(args.section_arc, "breach")
+        self.assertEqual(args.source_score, "breach")
         self.assertEqual(args.dropout_rate, 0.64)
         self.assertEqual(args.reverse_shard_rate, 0.46)
         self.assertEqual(args.filter_severity, "hard")
@@ -301,6 +306,27 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(breach["arc"], "breach")
         self.assertGreater(breach["dens"], classic["dens"])
         self.assertLess(breach["frag_mul"], classic["frag_mul"])
+
+    def test_source_material_score_prefers_matching_workflow_material(self) -> None:
+        spoken_args = types.SimpleNamespace(source_score="spoken", bpm=0.0, slice_grid="off", concrete=False)
+        beat_args = types.SimpleNamespace(source_score="beat", bpm=120.0, slice_grid="1/16", concrete=True)
+        breach_args = types.SimpleNamespace(source_score="breach", bpm=0.0, slice_grid="off", concrete=True)
+        voice = cutup.SampleFile(
+            path=Path("voice_phrase.wav"),
+            duration_ms=1800,
+            words=6,
+            intensity_hint=0,
+            loop_hint=1,
+            cue_start_ms=100,
+            cue_end_ms=1900,
+            cue_text="the signal repeats across the room",
+        )
+        loop = cutup.SampleFile(path=Path("drum_loop.wav"), duration_ms=8000, words=1, intensity_hint=0, loop_hint=2)
+        noise = cutup.SampleFile(path=Path("radio_static_dropout.wav"), duration_ms=900, words=1, intensity_hint=3, loop_hint=0)
+        pressure = {"name": "PRESSURE"}
+        self.assertGreater(cutup.source_material_score(voice, spoken_args), cutup.source_material_score(noise, spoken_args))
+        self.assertGreater(cutup.source_material_score(loop, beat_args), cutup.source_material_score(voice, beat_args))
+        self.assertGreater(cutup.source_material_score(noise, breach_args, profile=pressure), cutup.source_material_score(voice, breach_args, profile=pressure))
 
     def test_filter_pair_hard_is_narrower_than_light(self) -> None:
         hard_args = types.SimpleNamespace(filter_severity="hard")
@@ -616,6 +642,18 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(picked, samples[1])
         self.assertLess(weights[0], weights[1])
         self.assertEqual(weights[1], weights[2])
+
+    def test_weighted_choice_applies_source_material_score(self) -> None:
+        samples = [
+            cutup.SampleFile(path=Path("voice_phrase.wav"), duration_ms=1800, words=6, intensity_hint=0, loop_hint=1),
+            cutup.SampleFile(path=Path("radio_static_dropout.wav"), duration_ms=1800, words=1, intensity_hint=3, loop_hint=0),
+        ]
+        args = types.SimpleNamespace(source_score="breach", source_diversity=0.0, bpm=0.0, slice_grid="off", concrete=True)
+        with mock.patch.object(cutup.random, "choices", return_value=[samples[1]]) as choices:
+            picked = cutup.weighted_choice(samples, concrete=True, args=args, profile={"name": "COLLAPSE"})
+        weights = choices.call_args.kwargs["weights"]
+        self.assertEqual(picked, samples[1])
+        self.assertGreater(weights[1], weights[0])
 
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:
