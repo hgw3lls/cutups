@@ -68,6 +68,12 @@ List TRANSMISSIONS presets:
 python3 PY/cutup.py --list-presets
 ```
 
+Print a copy-ready command recipe:
+
+```bash
+python3 PY/cutup.py --show-recipe beat-similarity
+```
+
 Check local dependencies:
 
 ```bash
@@ -93,6 +99,8 @@ python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --outp
 ```
 
 See [TRANSMISSIONS_QUICKSTART.md](TRANSMISSIONS_QUICKSTART.md) for signal-breach, spoken-word, beat-cutup, radio-intrusion, hard-stutter, and ghost-transmission recipes. See [docs/MANUAL_QA.md](docs/MANUAL_QA.md) for repeatable listening checks after changes.
+
+Recipe names for `--show-recipe` include `qa-sources`, `signal-breach`, `spoken-word-cutup`, `spoken-word-cues`, `beat-cutup`, `beat-similarity`, `radio-intrusion`, `hard-stutter`, `ghost-transmission`, and `all`.
 
 Available preset names:
 

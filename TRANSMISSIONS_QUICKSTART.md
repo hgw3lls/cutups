@@ -28,6 +28,14 @@ python3 PY/cutup.py --list-presets
 
 Presets are starting points. Any explicit CLI flag overrides the preset value.
 
+Print a copy-ready recipe from the CLI:
+
+```bash
+python3 PY/cutup.py --show-recipe signal-breach
+```
+
+Use `--show-recipe all` to print every built-in recipe.
+
 ## Signal Breach
 
 Use speech, room recordings, radio grabs, or mixed source folders:

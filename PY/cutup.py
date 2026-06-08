@@ -315,6 +315,128 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
     },
 }
 
+RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
+    "qa-sources": (
+        "Create starter local WAV and cue sources outside the repo.",
+        "python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources",
+    ),
+    "signal-breach": (
+        "Glitchy interruptions, static bursts, dropouts, reverse shards, and hard transmission filtering.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset signal-breach \\\n"
+        "  --input ../cutups_qa_sources/signal \\\n"
+        "  --burst-rate 0.75 \\\n"
+        "  --dropout-rate 0.65 \\\n"
+        "  --reverse-shard-rate 0.50 \\\n"
+        "  --filter-severity hard \\\n"
+        "  --output out/signal_breach \\\n"
+        "  --duration 30 \\\n"
+        "  --preview-duration 10 \\\n"
+        "  --seed 701",
+    ),
+    "spoken-word-cutup": (
+        "Voice-first phrase cutups with higher intelligibility and editorial silence.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset spoken-word-cutup \\\n"
+        "  --input ../cutups_qa_sources/voice \\\n"
+        "  --phrase-length medium \\\n"
+        "  --intelligibility high \\\n"
+        "  --interruption-density low \\\n"
+        "  --silence-insert-ms 120:420 \\\n"
+        "  --output out/spoken_word \\\n"
+        "  --duration 45 \\\n"
+        "  --preview-duration 12 \\\n"
+        "  --seed 311",
+    ),
+    "spoken-word-cues": (
+        "Phrase-boundary spoken-word render using generated SRT cues.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset spoken-word-cutup \\\n"
+        "  --input ../cutups_qa_sources/voice/voice_phrase_a.wav \\\n"
+        "  --cue-file ../cutups_qa_sources/voice/voice_phrase_a.srt \\\n"
+        "  --cue-slice-mode full \\\n"
+        "  --output out/spoken_cued \\\n"
+        "  --duration 30 \\\n"
+        "  --preview-duration 10 \\\n"
+        "  --seed 313",
+    ),
+    "beat-cutup": (
+        "Grid-sliced loop cutup with stutters, repeats, mutes, and beat dropouts.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset beat-cutup \\\n"
+        "  --input ../cutups_qa_sources/loops \\\n"
+        "  --bpm 120 \\\n"
+        "  --slice-grid 1/16 \\\n"
+        "  --stutter-rate 0.55 \\\n"
+        "  --repeat-rate 0.45 \\\n"
+        "  --mute-rate 0.20 \\\n"
+        "  --beat-dropout-rate 0.15 \\\n"
+        "  --output out/beat_cutup \\\n"
+        "  --duration 32 \\\n"
+        "  --preview-duration 12 \\\n"
+        "  --seed 230",
+    ),
+    "beat-similarity": (
+        "Beat-grid render with source analysis, similarity jumps, and novelty bias.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset beat-cutup \\\n"
+        "  --input ../cutups_qa_sources/loops \\\n"
+        "  --bpm 120 \\\n"
+        "  --slice-grid 1/16 \\\n"
+        "  --beat-jump-mode similarity \\\n"
+        "  --beat-similarity-weight 1.0 \\\n"
+        "  --beat-novelty 0.35 \\\n"
+        "  --analysis-cache auto \\\n"
+        "  --output out/beat_similarity \\\n"
+        "  --duration 32 \\\n"
+        "  --preview-duration 12 \\\n"
+        "  --seed 230",
+    ),
+    "radio-intrusion": (
+        "Filtered voice intrusions with hiss, ghosts, and unstable broadcast texture.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset radio-intrusion \\\n"
+        "  --input ../cutups_qa_sources/voice \\\n"
+        "  --output out/radio_intrusion \\\n"
+        "  --duration 45 \\\n"
+        "  --preview-duration 12 \\\n"
+        "  --seed 31",
+    ),
+    "hard-stutter": (
+        "Aggressive micro-fragment repetition and abrupt grid mutes.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset hard-stutter \\\n"
+        "  --input ../cutups_qa_sources/loops \\\n"
+        "  --bpm 120 \\\n"
+        "  --slice-grid 1/32 \\\n"
+        "  --stutter-rate 0.85 \\\n"
+        "  --repeat-rate 0.65 \\\n"
+        "  --mute-rate 0.30 \\\n"
+        "  --output out/hard_stutter \\\n"
+        "  --duration 24 \\\n"
+        "  --preview-duration 10 \\\n"
+        "  --seed 241",
+    ),
+    "ghost-transmission": (
+        "Faint recurring voices, afterimages, dead air, and memory echoes.",
+        "python3 PY/cutup.py \\\n"
+        "  --mode audio \\\n"
+        "  --preset ghost-transmission \\\n"
+        "  --input ../cutups_qa_sources/voice \\\n"
+        "  --output out/ghost_transmission \\\n"
+        "  --duration 60 \\\n"
+        "  --preview-duration 12 \\\n"
+        "  --seed 53",
+    ),
+}
+
 KEYWORD_WEIGHTS: Dict[str, float] = {
     "official": 1.3,
     "authority": 1.4,
@@ -579,8 +701,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=7, help="Deterministic random seed.")
     p.add_argument("--preset", choices=sorted(PRESET_VALUES), default="", help="Named TRANSMISSIONS recipe.")
     p.add_argument("--list-presets", action="store_true", help="Print available TRANSMISSIONS presets and exit.")
+    p.add_argument("--show-recipe", choices=["all", *sorted(RECIPE_COMMANDS)], default="", help="Print a copy-ready TRANSMISSIONS command recipe and exit.")
     p.add_argument("--doctor", action="store_true", help="Check local Python/audio dependencies and bundled data, then exit.")
-    p.add_argument("--init-qa-sources", default="", help="Write synthetic local QA WAV sources under this folder, then exit.")
+    p.add_argument("--init-qa-sources", default="", help="Write synthetic local QA WAV/cue sources under this folder, then exit.")
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
@@ -645,6 +768,9 @@ def parse_args() -> argparse.Namespace:
     if parsed.list_presets:
         print_presets()
         raise SystemExit(0)
+    if parsed.show_recipe:
+        print_recipe(parsed.show_recipe)
+        raise SystemExit(0)
     if parsed.doctor:
         print_doctor()
         raise SystemExit(0)
@@ -682,6 +808,19 @@ def print_presets() -> None:
     print("TRANSMISSIONS presets:")
     for name in sorted(PRESET_VALUES):
         print(f"  {name}: {PRESET_VALUES[name]['description']}")
+
+
+def print_recipe(name: str) -> None:
+    names = list(RECIPE_COMMANDS) if name == "all" else [name]
+    print("TRANSMISSIONS recipes:")
+    for recipe_name in names:
+        if recipe_name not in RECIPE_COMMANDS:
+            raise SystemExit(f"Unknown recipe: {recipe_name}")
+        description, command = RECIPE_COMMANDS[recipe_name]
+        print(f"\n## {recipe_name}")
+        print(description)
+        print()
+        print(command)
 
 
 def format_check(ok: bool, detail: str) -> str:

@@ -15,6 +15,7 @@ The generated files are synthetic placeholders. Replace or supplement them with 
 ```bash
 python3 PY/cutup.py --doctor
 python3 PY/cutup.py --list-presets
+python3 PY/cutup.py --show-recipe all
 python3 PY/cutup.py --help
 python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources --overwrite
 ```
@@ -23,6 +24,7 @@ Expected:
 
 - `--doctor` reports `status: ready`.
 - `--list-presets` includes `signal-breach`, `spoken-word-cutup`, `beat-cutup`, `radio-intrusion`, `hard-stutter`, and `ghost-transmission`.
+- `--show-recipe all` prints copy-ready QA and production commands.
 - `--help` includes beat controls such as `--beat-jump-mode`, `--beat-similarity-weight`, and `--beat-novelty`.
 - `--init-qa-sources` writes `loops`, `voice`, and `signal` WAV folders plus voice cue files.
 

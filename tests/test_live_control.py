@@ -49,6 +49,23 @@ class LiveControlTests(unittest.TestCase):
         self.assertTrue(all(isinstance(ok, bool) for _, ok, _ in checks))
         self.assertTrue(all(detail for _, _, detail in checks))
 
+    def test_print_recipe_outputs_copy_ready_command(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cutup.print_recipe("beat-similarity")
+        text = out.getvalue()
+        self.assertIn("## beat-similarity", text)
+        self.assertIn("--preset beat-cutup", text)
+        self.assertIn("--beat-jump-mode similarity", text)
+        self.assertIn("--beat-novelty 0.35", text)
+
+    def test_print_recipe_all_includes_qa_sources(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cutup.print_recipe("all")
+        text = out.getvalue()
+        self.assertIn("## qa-sources", text)
+        self.assertIn("--init-qa-sources ../cutups_qa_sources", text)
+        self.assertIn("## signal-breach", text)
+
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "qa_sources"
