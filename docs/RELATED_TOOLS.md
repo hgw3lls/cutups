@@ -48,8 +48,7 @@ Use these projects as references, not embedded dependencies.
 2. Expand native lightweight beat descriptors:
    - spectral centroid if `librosa` is installed
    - onset/novelty hints
-3. Wire beat jump planning into source selection:
-   - `--beat-jump-mode random|similarity`
+3. Refine beat jump source selection:
    - `--beat-similarity-weight`
    - `--beat-novelty`
    - `--analysis-cache`

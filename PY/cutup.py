@@ -133,7 +133,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 5
+ANALYSIS_CACHE_VERSION = 6
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
 ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
@@ -338,6 +338,15 @@ class SampleFile:
 
 
 @dataclass
+class BeatJumpState:
+    active: bool = False
+    neighbor_keys: Dict[str, List[str]] = field(default_factory=dict)
+    samples_by_key: Dict[str, SampleFile] = field(default_factory=dict)
+    selections: int = 0
+    fallbacks: int = 0
+
+
+@dataclass
 class Event:
     layer: str
     section: str
@@ -410,6 +419,8 @@ class RunSummary:
     chants: int = 0
     cut_matches: int = 0
     audio_events: int = 0
+    beat_similarity_jumps: int = 0
+    beat_similarity_fallbacks: int = 0
     section_distribution: Counter = field(default_factory=Counter)
     recurring_sources: Counter = field(default_factory=Counter)
     output_paths: List[str] = field(default_factory=list)
@@ -566,7 +577,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
-    p.add_argument("--beat-jump-mode", choices=["random", "similarity"], default="random", help="Beat source jump planner. Similarity mode writes cache planning metadata; render source selection remains random in this release.")
+    p.add_argument("--beat-jump-mode", choices=["random", "similarity"], default="random", help="Beat source jump planner. Similarity mode uses cache planning metadata when available and falls back to weighted random selection.")
     p.add_argument("--stutter-rate", type=float, default=0.0, help="Beat-grid probability for retriggered stutter cells; requires active --bpm/--slice-grid.")
     p.add_argument("--mute-rate", type=float, default=0.0, help="Beat-grid probability for replacing cells with silence; requires active --bpm/--slice-grid.")
     p.add_argument("--repeat-rate", type=float, default=0.0, help="Beat-grid probability for repeating cells; requires active --bpm/--slice-grid.")
@@ -2284,6 +2295,7 @@ def build_beat_jump_plan(entries: List[Dict[str, object]], args: argparse.Namesp
                 continue
             neighbors.append(
                 {
+                    "target_cache_key": str(target.get("cache_key", "")),
                     "target_index": safe_int(str(target.get("index", 0)), 0),
                     "target_basename": str(target.get("basename", "")),
                     "target_path": str(target.get("path", "")),
@@ -2293,6 +2305,7 @@ def build_beat_jump_plan(entries: List[Dict[str, object]], args: argparse.Namesp
         neighbors.sort(key=lambda item: (float(item["distance"]), str(item["target_basename"])))
         sources.append(
             {
+                "source_cache_key": str(source.get("cache_key", "")),
                 "source_index": safe_int(str(source.get("index", 0)), 0),
                 "source_basename": str(source.get("basename", "")),
                 "source_path": str(source.get("path", "")),
@@ -2306,6 +2319,46 @@ def build_beat_jump_plan(entries: List[Dict[str, object]], args: argparse.Namesp
         "neighbor_count": max(0, min(top_k, len(entries) - 1)),
         "sources": sources,
     }
+
+
+def beat_jump_neighbor_keys(payload: Dict[str, object]) -> Dict[str, List[str]]:
+    plan = payload.get("beat_jump_plan", {})
+    if not isinstance(plan, dict) or plan.get("mode") != "similarity":
+        return {}
+    raw_sources = plan.get("sources", [])
+    if not isinstance(raw_sources, list):
+        return {}
+
+    out: Dict[str, List[str]] = {}
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            continue
+        source_key = str(raw_source.get("source_cache_key", ""))
+        raw_neighbors = raw_source.get("neighbors", [])
+        if not source_key or not isinstance(raw_neighbors, list):
+            continue
+        keys = [str(neighbor.get("target_cache_key", "")) for neighbor in raw_neighbors if isinstance(neighbor, dict)]
+        keys = [key for key in keys if key]
+        if keys:
+            out[source_key] = keys
+    return out
+
+
+def build_beat_jump_state(samples: List[SampleFile], args: argparse.Namespace, cache_payload: Dict[str, object]) -> BeatJumpState:
+    if str(getattr(args, "beat_jump_mode", "random") or "random") != "similarity":
+        return BeatJumpState()
+    neighbor_keys = beat_jump_neighbor_keys(cache_payload)
+    if not neighbor_keys:
+        return BeatJumpState()
+    samples_by_key = {analysis_cache_key_for_sample(sample, args): sample for sample in samples}
+    usable: Dict[str, List[str]] = {}
+    for source_key, keys in neighbor_keys.items():
+        if source_key not in samples_by_key:
+            continue
+        filtered = [key for key in keys if key in samples_by_key and key != source_key]
+        if filtered:
+            usable[source_key] = filtered
+    return BeatJumpState(active=bool(usable), neighbor_keys=usable, samples_by_key=samples_by_key)
 
 
 def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
@@ -2411,6 +2464,28 @@ def weighted_choice(samples: List[SampleFile], concrete: bool) -> SampleFile:
         word_bonus = 1.3 if 2 <= s.words <= 8 else 0.7
         weights.append(max(0.1, dur_bonus + word_bonus + s.intensity_hint + s.loop_hint))
     return random.choices(samples, weights=weights, k=1)[0]
+
+
+def choose_source_sample(
+    samples: List[SampleFile],
+    args: argparse.Namespace,
+    concrete: bool,
+    beat_jump: Optional[BeatJumpState] = None,
+    previous_sample: Optional[SampleFile] = None,
+) -> SampleFile:
+    if beat_jump and beat_jump.active and previous_sample is not None:
+        source_key = analysis_cache_key_for_sample(previous_sample, args)
+        neighbor_keys = beat_jump.neighbor_keys.get(source_key, [])
+        candidates = [beat_jump.samples_by_key[key] for key in neighbor_keys if key in beat_jump.samples_by_key]
+        if candidates:
+            pool = candidates[:3]
+            weights = [len(pool) - idx for idx, _ in enumerate(pool)]
+            beat_jump.selections += 1
+            return random.choices(pool, weights=weights, k=1)[0]
+        beat_jump.fallbacks += 1
+    elif beat_jump and beat_jump.active:
+        beat_jump.fallbacks += 1
+    return weighted_choice(samples, concrete)
 
 
 def section_profile(progress: float, args: argparse.Namespace) -> Dict[str, float]:
@@ -2818,7 +2893,7 @@ def build_section_score(events: List[Event]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int, live: Optional[LiveControlState] = None) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
+def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int, live: Optional[LiveControlState] = None, beat_jump: Optional[BeatJumpState] = None) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     ghosts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -2826,6 +2901,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
     memory: Deque[SampleFile] = deque(maxlen=max(1, args.memory_depth))
     recurrence_memory: Deque[Tuple[SampleFile, AudioSegment, Dict[str, object], str]] = deque(maxlen=max(3, args.memory_depth * 2))
     recurrence_count: Dict[str, int] = {}
+    previous_source_sample: Optional[SampleFile] = None
     plan = section_plan(total_ms)
     grid_ms = beat_grid_ms(args)
 
@@ -2874,7 +2950,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             meta = dict(meta)
             meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
         else:
-            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else weighted_choice(samples, local_args.concrete)
+            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else choose_source_sample(samples, local_args, local_args.concrete, beat_jump=beat_jump, previous_sample=previous_source_sample)
             src = source_audio_for_sample(sample, local_args)
             if sample.has_cue() and str(getattr(local_args, "cue_slice_mode", "full")) == "full":
                 frag = src
@@ -2979,6 +3055,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
 
         memory.append(sample)
         recurrence_memory.append((sample, shaped, meta, sec_name))
+        previous_source_sample = sample
         rec_idx = recurrence_count[str(sample.path)]
         events.append(
             Event(
@@ -3038,7 +3115,7 @@ def normalize_master(audio: AudioSegment, master_gain: float) -> AudioSegment:
     return compress_dynamic_range(audio, threshold=-22.0, ratio=2.4, attack=8, release=140).apply_gain(master_gain)
 
 
-def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int, args: argparse.Namespace, summary: RunSummary, live: Optional[LiveControlState] = None) -> None:
+def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int, args: argparse.Namespace, summary: RunSummary, live: Optional[LiveControlState] = None, beat_jump: Optional[BeatJumpState] = None) -> None:
     total_ms = max(2000, int(max(1.0, args.duration) * 1000))
     min_frag_ms = max(10, int(max(0.01, args.min_frag) * 1000))
     max_frag_ms = max(min_frag_ms, int(max(args.min_frag, args.max_frag) * 1000))
@@ -3048,7 +3125,7 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     stems_dir = variant_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
-    main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms, live=live)
+    main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms, live=live, beat_jump=beat_jump)
     hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
 
     master = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -3104,6 +3181,7 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
         print(f"Warning: skipped {unreadable} unusable audio/cue row(s) while scanning {source}")
 
     analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
+    cache_payload: Dict[str, object] = {}
     if analysis_cache:
         cache_path = write_analysis_cache(analysis_cache, samples, args, input_root)
         summary.output_paths.append(str(cache_path))
@@ -3117,12 +3195,21 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
         else:
             print(f"Analysis cache written: {cache_path}")
 
+    beat_jump = build_beat_jump_state(samples, args, cache_payload)
+    if str(getattr(args, "beat_jump_mode", "random") or "random") == "similarity":
+        if beat_jump.active:
+            print(f"Beat jump planner active: {len(beat_jump.neighbor_keys)} source(s)")
+        else:
+            print("Beat jump planner inactive; using weighted random source selection")
+
     audio_out = output_root / "audio_cutups"
     audio_out.mkdir(parents=True, exist_ok=True)
     for i in range(1, max(1, args.variants) + 1):
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
-        build_variant(samples, audio_out, i, local_args, summary, live=live)
+        build_variant(samples, audio_out, i, local_args, summary, live=live, beat_jump=beat_jump)
+    summary.beat_similarity_jumps += beat_jump.selections
+    summary.beat_similarity_fallbacks += beat_jump.fallbacks
 
 
 # -------------------------------------------------------------------
@@ -3137,6 +3224,8 @@ def print_summary(summary: RunSummary) -> None:
     print(f"Generated slogans/broadcasts/chants: {summary.slogans}/{summary.broadcasts}/{summary.chants}")
     print(f"Cut-target matches written: {summary.cut_matches}")
     print(f"Audio events placed: {summary.audio_events}")
+    if summary.beat_similarity_jumps or summary.beat_similarity_fallbacks:
+        print(f"Beat similarity jumps/fallbacks: {summary.beat_similarity_jumps}/{summary.beat_similarity_fallbacks}")
     if summary.section_distribution:
         print("Section distribution:", dict(summary.section_distribution))
     if summary.recurring_sources:
@@ -3159,6 +3248,8 @@ def maybe_export_debug_summary(summary: RunSummary, output_root: Path) -> None:
         f"chants={summary.chants}",
         f"cut_matches={summary.cut_matches}",
         f"audio_events={summary.audio_events}",
+        f"beat_similarity_jumps={summary.beat_similarity_jumps}",
+        f"beat_similarity_fallbacks={summary.beat_similarity_fallbacks}",
         f"section_distribution={dict(summary.section_distribution)}",
         f"top_recurring_sources={summary.recurring_sources.most_common(8)}",
         "outputs:",

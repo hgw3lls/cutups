@@ -160,7 +160,7 @@ Useful grid values: `1/4`, `1/8`, `1/16`, `1/32`, `1/8t`, `1/16t`. Grid mode qua
 
 Add `--analysis-cache auto` to write `audio_analysis_cache.json` under the output folder. It captures source/cue identity, duration, RMS/loudness, zero-crossing rate, channels, sample rate, beat-grid context, capped grid-cell summaries, and normalized similarity vectors for inspection and future similarity planning.
 
-Add `--beat-jump-mode similarity` with `--analysis-cache auto` to write nearest-neighbor beat jump suggestions into the cache. This is planning metadata for now; render source selection still uses the existing random/weighted behavior.
+Add `--beat-jump-mode similarity` with `--analysis-cache auto` to write nearest-neighbor beat jump suggestions into the cache and use them for source-to-source jumps when possible. If the planner has no usable neighbor, rendering falls back to the existing weighted random behavior.
 
 Beat controls only act when the grid is active:
 

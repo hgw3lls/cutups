@@ -357,18 +357,21 @@ class LiveControlTests(unittest.TestCase):
                 "index": 1,
                 "basename": "a.wav",
                 "path": "a.wav",
+                "cache_key": "a",
                 "similarity_vector": {"values": [0.10, 0.10]},
             },
             {
                 "index": 2,
                 "basename": "b.wav",
                 "path": "b.wav",
+                "cache_key": "b",
                 "similarity_vector": {"values": [0.12, 0.10]},
             },
             {
                 "index": 3,
                 "basename": "c.wav",
                 "path": "c.wav",
+                "cache_key": "c",
                 "similarity_vector": {"values": [0.90, 0.90]},
             },
         ]
@@ -376,8 +379,43 @@ class LiveControlTests(unittest.TestCase):
         plan = cutup.build_beat_jump_plan(entries, args, top_k=2)
         self.assertEqual(plan["mode"], "similarity")
         self.assertEqual(plan["neighbor_count"], 2)
+        self.assertEqual(plan["sources"][0]["source_cache_key"], "a")
+        self.assertEqual(plan["sources"][0]["neighbors"][0]["target_cache_key"], "b")
         self.assertEqual(plan["sources"][0]["neighbors"][0]["target_basename"], "b.wav")
         self.assertLess(plan["sources"][0]["neighbors"][0]["distance"], plan["sources"][0]["neighbors"][1]["distance"])
+
+    def test_choose_source_sample_uses_similarity_neighbor_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = [root / "a.wav", root / "b.wav"]
+            for path in paths:
+                path.write_bytes(b"placeholder")
+            args = types.SimpleNamespace(sample_rate=44100, beat_jump_mode="similarity")
+            samples = [
+                cutup.SampleFile(path=paths[0], duration_ms=1000, words=1, intensity_hint=0, loop_hint=0),
+                cutup.SampleFile(path=paths[1], duration_ms=1000, words=1, intensity_hint=0, loop_hint=0),
+            ]
+            key_a = cutup.analysis_cache_key_for_sample(samples[0], args)
+            key_b = cutup.analysis_cache_key_for_sample(samples[1], args)
+            payload = {
+                "beat_jump_plan": {
+                    "mode": "similarity",
+                    "sources": [
+                        {
+                            "source_cache_key": key_a,
+                            "neighbors": [{"target_cache_key": key_b}],
+                        }
+                    ],
+                }
+            }
+            state = cutup.build_beat_jump_state(samples, args, payload)
+
+            picked = cutup.choose_source_sample(samples, args, concrete=False, beat_jump=state, previous_sample=samples[0])
+
+            self.assertTrue(state.active)
+            self.assertEqual(picked, samples[1])
+            self.assertEqual(state.selections, 1)
+            self.assertEqual(state.fallbacks, 0)
 
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:
