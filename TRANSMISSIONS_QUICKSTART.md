@@ -158,7 +158,7 @@ python3 PY/cutup.py \
 
 Useful grid values: `1/4`, `1/8`, `1/16`, `1/32`, `1/8t`, `1/16t`. Grid mode quantizes source slice lengths and event starts, while repeats, ghosts, reversals, and gaps can still disrupt the loop.
 
-Add `--analysis-cache auto` to write `audio_analysis_cache.json` under the output folder. It captures source/cue identity, duration, RMS/loudness, zero-crossing rate, channels, sample rate, beat-grid context, and capped grid-cell summaries for inspection and future similarity planning.
+Add `--analysis-cache auto` to write `audio_analysis_cache.json` under the output folder. It captures source/cue identity, duration, RMS/loudness, zero-crossing rate, channels, sample rate, beat-grid context, capped grid-cell summaries, and normalized similarity vectors for inspection and future similarity planning.
 
 Beat controls only act when the grid is active:
 

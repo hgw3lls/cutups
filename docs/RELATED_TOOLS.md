@@ -48,7 +48,6 @@ Use these projects as references, not embedded dependencies.
 2. Expand native lightweight beat descriptors:
    - spectral centroid if `librosa` is installed
    - onset/novelty hints
-   - similarity-ready vectors derived from grid-cell summaries
 3. Add beat jump planning:
    - `--beat-jump-mode random|similarity`
    - `--beat-similarity-weight`

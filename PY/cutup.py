@@ -133,9 +133,18 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 3
-ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary")
+ANALYSIS_CACHE_VERSION = 4
+ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
+ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
+    "duration",
+    "loudness",
+    "zero_crossing",
+    "grid_loudness_mean",
+    "grid_loudness_variation",
+    "grid_zcr_mean",
+    "grid_zcr_variation",
+)
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -2188,11 +2197,55 @@ def grid_cell_summary(audio: Any, grid_ms: int, max_cells: int = ANALYSIS_GRID_C
     }
 
 
+def normalize_dbfs(value: object) -> float:
+    dbfs = safe_float(str(value), -90.0)
+    if not math.isfinite(dbfs):
+        return 0.0
+    return round(max(0.0, min(1.0, (dbfs + 60.0) / 60.0)), 6)
+
+
+def normalized_duration(duration_ms: object, max_seconds: float = 30.0) -> float:
+    seconds = max(0.0, safe_float(str(duration_ms), 0.0) / 1000.0)
+    return round(max(0.0, min(1.0, math.log1p(seconds) / math.log1p(max_seconds))), 6)
+
+
+def mean_and_variation(values: Sequence[float]) -> Tuple[float, float]:
+    clean = [float(v) for v in values if math.isfinite(float(v))]
+    if not clean:
+        return 0.0, 0.0
+    mean = sum(clean) / len(clean)
+    variation = math.sqrt(sum((value - mean) ** 2 for value in clean) / len(clean))
+    return round(max(0.0, min(1.0, mean)), 6), round(max(0.0, min(1.0, variation)), 6)
+
+
+def similarity_vector_for_entry(entry: Dict[str, object]) -> Dict[str, object]:
+    grid_summary = entry.get("grid_cell_summary", {})
+    cells = grid_summary.get("cells", []) if isinstance(grid_summary, dict) else []
+    if not isinstance(cells, list):
+        cells = []
+    grid_loudness, grid_loudness_variation = mean_and_variation(
+        [normalize_dbfs(cell.get("dbfs")) for cell in cells if isinstance(cell, dict)]
+    )
+    grid_zcr, grid_zcr_variation = mean_and_variation(
+        [max(0.0, min(1.0, safe_float(str(cell.get("zero_crossing_rate", 0.0)), 0.0))) for cell in cells if isinstance(cell, dict)]
+    )
+    values = [
+        normalized_duration(entry.get("duration_ms", 0)),
+        normalize_dbfs(entry.get("dbfs")),
+        max(0.0, min(1.0, safe_float(str(entry.get("zero_crossing_rate", 0.0)), 0.0))),
+        grid_loudness,
+        grid_loudness_variation,
+        grid_zcr,
+        grid_zcr_variation,
+    ]
+    return {"fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS), "values": [round(value, 6) for value in values]}
+
+
 def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
     audio = source_audio_for_sample(sample, args)
     size_bytes, mtime = audio_file_stat(sample.path)
     grid_ms = beat_grid_ms(args)
-    return {
+    entry = {
         "index": index,
         "cache_key": analysis_cache_key_for_sample(sample, args),
         "cache_state": "fresh",
@@ -2219,6 +2272,8 @@ def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, inde
         "zero_crossing_rate": zero_crossing_rate(audio),
         "grid_cell_summary": grid_cell_summary(audio, grid_ms),
     }
+    entry["similarity_vector"] = similarity_vector_for_entry(entry)
+    return entry
 
 
 def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.Namespace, input_root: Path) -> Path:
@@ -2261,6 +2316,7 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
         "bpm": args.bpm,
         "slice_grid": args.slice_grid,
         "grid_ms": beat_grid_ms(args),
+        "similarity_vector_fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS),
         "cache_stats": {"reused": reused, "refreshed": refreshed, "errors": len(errors)},
         "samples": entries,
         "errors": errors,

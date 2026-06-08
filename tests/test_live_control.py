@@ -331,6 +331,26 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(summary["cells"][0]["duration_ms"], 100)
         self.assertEqual(summary["cells"][0]["zero_crossing_rate"], 1.0)
 
+    def test_similarity_vector_for_entry_normalizes_descriptors(self) -> None:
+        entry = {
+            "duration_ms": 30000,
+            "dbfs": -30.0,
+            "zero_crossing_rate": 0.4,
+            "grid_cell_summary": {
+                "cells": [
+                    {"dbfs": -30.0, "zero_crossing_rate": 0.25},
+                    {"dbfs": -60.0, "zero_crossing_rate": 0.75},
+                ]
+            },
+        }
+        vector = cutup.similarity_vector_for_entry(entry)
+        self.assertEqual(vector["fields"], list(cutup.ANALYSIS_SIMILARITY_VECTOR_FIELDS))
+        self.assertEqual(len(vector["values"]), len(cutup.ANALYSIS_SIMILARITY_VECTOR_FIELDS))
+        self.assertTrue(all(0 <= value <= 1 for value in vector["values"]))
+        self.assertEqual(vector["values"][0], 1.0)
+        self.assertEqual(vector["values"][1], 0.5)
+        self.assertEqual(vector["values"][2], 0.4)
+
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -376,6 +396,10 @@ class LiveControlTests(unittest.TestCase):
                 "rms": 123,
                 "zero_crossing_rate": 0.25,
                 "grid_cell_summary": {"grid_ms": 125, "cell_count": 8, "captured": 8, "truncated": False, "cells": []},
+                "similarity_vector": {
+                    "fields": list(cutup.ANALYSIS_SIMILARITY_VECTOR_FIELDS),
+                    "values": [0.1, 0.2, 0.25, 0.2, 0.0, 0.25, 0.0],
+                },
             }
             cache.write_text(
                 json.dumps(
@@ -397,6 +421,7 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(payload["samples"][0]["rms"], 123)
             self.assertEqual(payload["samples"][0]["zero_crossing_rate"], 0.25)
             self.assertEqual(payload["samples"][0]["grid_cell_summary"]["grid_ms"], 125)
+            self.assertEqual(payload["samples"][0]["similarity_vector"]["values"][2], 0.25)
 
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:

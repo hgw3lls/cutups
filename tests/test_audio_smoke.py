@@ -160,8 +160,18 @@ class AudioSmokeTests(unittest.TestCase):
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
-            self.assertEqual(cache["version"], 3)
+            self.assertEqual(cache["version"], 4)
             self.assertEqual(cache["grid_ms"], 125)
+            sample_fields = [
+                "duration",
+                "loudness",
+                "zero_crossing",
+                "grid_loudness_mean",
+                "grid_loudness_variation",
+                "grid_zcr_mean",
+                "grid_zcr_variation",
+            ]
+            self.assertEqual(cache["similarity_vector_fields"], sample_fields)
             self.assertEqual(cache["cache_stats"], {"errors": 0, "refreshed": 1, "reused": 0})
             self.assertEqual(len(cache["samples"]), 1)
             sample = cache["samples"][0]
@@ -177,6 +187,9 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertFalse(sample["grid_cell_summary"]["truncated"])
             self.assertIn("rms", sample["grid_cell_summary"]["cells"][0])
             self.assertIn("zero_crossing_rate", sample["grid_cell_summary"]["cells"][0])
+            self.assertEqual(sample["similarity_vector"]["fields"], sample_fields)
+            self.assertEqual(len(sample["similarity_vector"]["values"]), len(sample_fields))
+            self.assertTrue(all(0 <= value <= 1 for value in sample["similarity_vector"]["values"]))
 
     def test_audio_cli_uses_srt_cues_as_phrase_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
