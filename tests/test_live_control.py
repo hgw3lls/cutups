@@ -351,6 +351,34 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(vector["values"][1], 0.5)
         self.assertEqual(vector["values"][2], 0.4)
 
+    def test_build_beat_jump_plan_orders_nearest_neighbors(self) -> None:
+        entries = [
+            {
+                "index": 1,
+                "basename": "a.wav",
+                "path": "a.wav",
+                "similarity_vector": {"values": [0.10, 0.10]},
+            },
+            {
+                "index": 2,
+                "basename": "b.wav",
+                "path": "b.wav",
+                "similarity_vector": {"values": [0.12, 0.10]},
+            },
+            {
+                "index": 3,
+                "basename": "c.wav",
+                "path": "c.wav",
+                "similarity_vector": {"values": [0.90, 0.90]},
+            },
+        ]
+        args = types.SimpleNamespace(beat_jump_mode="similarity")
+        plan = cutup.build_beat_jump_plan(entries, args, top_k=2)
+        self.assertEqual(plan["mode"], "similarity")
+        self.assertEqual(plan["neighbor_count"], 2)
+        self.assertEqual(plan["sources"][0]["neighbors"][0]["target_basename"], "b.wav")
+        self.assertLess(plan["sources"][0]["neighbors"][0]["distance"], plan["sources"][0]["neighbors"][1]["distance"])
+
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

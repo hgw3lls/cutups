@@ -133,7 +133,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 4
+ANALYSIS_CACHE_VERSION = 5
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
 ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
@@ -566,6 +566,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
+    p.add_argument("--beat-jump-mode", choices=["random", "similarity"], default="random", help="Beat source jump planner. Similarity mode writes cache planning metadata; render source selection remains random in this release.")
     p.add_argument("--stutter-rate", type=float, default=0.0, help="Beat-grid probability for retriggered stutter cells; requires active --bpm/--slice-grid.")
     p.add_argument("--mute-rate", type=float, default=0.0, help="Beat-grid probability for replacing cells with silence; requires active --bpm/--slice-grid.")
     p.add_argument("--repeat-rate", type=float, default=0.0, help="Beat-grid probability for repeating cells; requires active --bpm/--slice-grid.")
@@ -1194,6 +1195,9 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
         print(f"beat_grid: {args.bpm:g} bpm {args.slice_grid} ({grid_ms} ms)")
     else:
         print(f"beat_grid: inactive (bpm={args.bpm:g}, slice_grid={args.slice_grid})")
+    print(f"beat_jump_mode: {args.beat_jump_mode}")
+    if args.beat_jump_mode == "similarity" and not analysis_cache:
+        print("beat_jump_plan: enable --analysis-cache to write similarity planning metadata")
     beat_rates = beat_control_rates(args)
     if any(beat_rates.values()):
         state = "active" if grid_ms > 0 else "inactive until --bpm and --slice-grid are active"
@@ -2241,6 +2245,69 @@ def similarity_vector_for_entry(entry: Dict[str, object]) -> Dict[str, object]:
     return {"fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS), "values": [round(value, 6) for value in values]}
 
 
+def similarity_vector_values(entry: Dict[str, object]) -> List[float]:
+    raw_vector = entry.get("similarity_vector", {})
+    raw_values = raw_vector.get("values", []) if isinstance(raw_vector, dict) else []
+    if not isinstance(raw_values, list):
+        return []
+    values: List[float] = []
+    for raw in raw_values:
+        value = safe_float(str(raw), 0.0)
+        if math.isfinite(value):
+            values.append(max(0.0, min(1.0, value)))
+    return values
+
+
+def similarity_distance(left: Dict[str, object], right: Dict[str, object]) -> Optional[float]:
+    left_values = similarity_vector_values(left)
+    right_values = similarity_vector_values(right)
+    width = min(len(left_values), len(right_values))
+    if width <= 0:
+        return None
+    distance = math.sqrt(sum((left_values[idx] - right_values[idx]) ** 2 for idx in range(width)) / width)
+    return round(distance, 6)
+
+
+def build_beat_jump_plan(entries: List[Dict[str, object]], args: argparse.Namespace, top_k: int = 3) -> Dict[str, object]:
+    mode = str(getattr(args, "beat_jump_mode", "random") or "random")
+    if mode != "similarity":
+        return {"mode": mode, "metric": "none", "fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS), "sources": []}
+
+    sources: List[Dict[str, object]] = []
+    for source in entries:
+        neighbors: List[Dict[str, object]] = []
+        for target in entries:
+            if target is source:
+                continue
+            distance = similarity_distance(source, target)
+            if distance is None:
+                continue
+            neighbors.append(
+                {
+                    "target_index": safe_int(str(target.get("index", 0)), 0),
+                    "target_basename": str(target.get("basename", "")),
+                    "target_path": str(target.get("path", "")),
+                    "distance": distance,
+                }
+            )
+        neighbors.sort(key=lambda item: (float(item["distance"]), str(item["target_basename"])))
+        sources.append(
+            {
+                "source_index": safe_int(str(source.get("index", 0)), 0),
+                "source_basename": str(source.get("basename", "")),
+                "source_path": str(source.get("path", "")),
+                "neighbors": neighbors[: max(0, top_k)],
+            }
+        )
+    return {
+        "mode": mode,
+        "metric": "normalized_euclidean",
+        "fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS),
+        "neighbor_count": max(0, min(top_k, len(entries) - 1)),
+        "sources": sources,
+    }
+
+
 def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
     audio = source_audio_for_sample(sample, args)
     size_bytes, mtime = audio_file_stat(sample.path)
@@ -2315,8 +2382,10 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
         "sample_rate": args.sample_rate,
         "bpm": args.bpm,
         "slice_grid": args.slice_grid,
+        "beat_jump_mode": str(getattr(args, "beat_jump_mode", "random") or "random"),
         "grid_ms": beat_grid_ms(args),
         "similarity_vector_fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS),
+        "beat_jump_plan": build_beat_jump_plan(entries, args),
         "cache_stats": {"reused": reused, "refreshed": refreshed, "errors": len(errors)},
         "samples": entries,
         "errors": errors,
