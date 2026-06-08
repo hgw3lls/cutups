@@ -10,11 +10,29 @@ from __future__ import annotations
 
 import argparse
 import json
-import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import ttk
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
+
+
+tk: Any = None
+ttk: Any = None
+
+
+def ensure_tk() -> None:
+    global tk, ttk
+    if tk is not None and ttk is not None:
+        return
+    try:
+        import tkinter as tk_module
+        from tkinter import ttk as ttk_module
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Tk GUI unavailable: this Python environment does not provide tkinter/_tkinter. "
+            "Use cutups-live-monitor or install a Python build with Tk support."
+        ) from exc
+    tk = tk_module
+    ttk = ttk_module
 
 
 RANGES: Dict[str, Tuple[float, float, float]] = {
@@ -192,6 +210,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    ensure_tk()
     control_file = Path(args.control_file).expanduser().resolve()
 
     root = tk.Tk()

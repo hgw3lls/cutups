@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cutups"
+version = "0.1.0"
+description = "TRANSMISSIONS cut-up instrument for speech, beats, signal breaches, and agitprop text."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pydub>=0.25.1",
+  "audioop-lts>=0.2.1; python_version >= '3.13'",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+analysis = [
+  "librosa>=0.10",
+  "scikit-learn>=1.4",
+]
+
+[project.scripts]
+cutups = "PY.cutup:main"
+cutups-live-gui = "PY.live_control_gui:main"
+cutups-live-monitor = "PY.live_control_monitor:main"
+cutups-td-bridge = "PY.live_control_td_bridge:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["PY*"]
+
+[tool.setuptools.package-data]
+PY = ["*.csv"]

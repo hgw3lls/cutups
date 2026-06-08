@@ -6,8 +6,9 @@
 - **Agitprop text generation** (`--mode agitprop`) for slogans, broadcasts, and chant cells.
 - **Cut-target matching** (`--mode cuttargets`) for phrase targeting workflows.
 
-The main entry point is:
+The main entry points are:
 
+- `cutups` after installation
 - `PY/cutup.py`
 
 ---
@@ -18,17 +19,23 @@ The main entry point is:
 - `pydub`
 - `ffmpeg` available on PATH (required by `pydub` for many file formats)
 
-Install Python dependency:
+Install locally as an editable package:
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install -e .
+cutups --doctor
+```
+
+The direct script entry point still works:
+
+```bash
 python3 PY/cutup.py --doctor
 ```
 
 For tests:
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+python3 -m pip install -e ".[dev]"
 python3 -m pytest
 ```
 
@@ -41,10 +48,17 @@ python3 -m pytest tests/test_audio_smoke.py -q
 Optional future analysis dependencies are kept separate:
 
 ```bash
-python3 -m pip install -r requirements-analysis.txt
+python3 -m pip install -e ".[analysis]"
 ```
 
-`python3 PY/cutup.py --doctor` reports those packages under `optional analysis` without making them required for normal `status: ready`.
+`cutups --doctor` reports those packages under `optional analysis` without making them required for normal `status: ready`.
+
+Installed console commands:
+
+- `cutups`
+- `cutups-live-gui`
+- `cutups-live-monitor`
+- `cutups-td-bridge`
 
 See [docs/RELATED_TOOLS.md](docs/RELATED_TOOLS.md) for notes on Remixatron, Infinite Remixer, AudioGuide, and why they are references rather than vendored dependencies.
 
@@ -55,35 +69,35 @@ See [docs/RELATED_TOOLS.md](docs/RELATED_TOOLS.md) for notes on Remixatron, Infi
 From repo root:
 
 ```bash
-python3 PY/cutup.py --mode agitprop --output out/demo_text
+cutups --mode agitprop --output out/demo_text
 ```
 
 ```bash
-python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --output out/demo_audio
+cutups --mode audio --preset signal-breach --input ./samples --output out/demo_audio
 ```
 
 List TRANSMISSIONS presets:
 
 ```bash
-python3 PY/cutup.py --list-presets
+cutups --list-presets
 ```
 
 Print a copy-ready command recipe:
 
 ```bash
-python3 PY/cutup.py --show-recipe beat-similarity
+cutups --show-recipe beat-similarity
 ```
 
 Check local dependencies:
 
 ```bash
-python3 PY/cutup.py --doctor
+cutups --doctor
 ```
 
 Create starter local QA WAV/cue sources outside the repo:
 
 ```bash
-python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources
+cutups --init-qa-sources ../cutups_qa_sources
 ```
 
 Check a render setup without writing audio:

@@ -318,11 +318,11 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
 RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     "qa-sources": (
         "Create starter local WAV and cue sources outside the repo.",
-        "python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources",
+        "cutups --init-qa-sources ../cutups_qa_sources",
     ),
     "signal-breach": (
         "Glitchy interruptions, static bursts, dropouts, reverse shards, and hard transmission filtering.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset signal-breach \\\n"
         "  --input ../cutups_qa_sources/signal \\\n"
@@ -337,7 +337,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "spoken-word-cutup": (
         "Voice-first phrase cutups with higher intelligibility and editorial silence.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset spoken-word-cutup \\\n"
         "  --input ../cutups_qa_sources/voice \\\n"
@@ -352,7 +352,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "spoken-word-cues": (
         "Phrase-boundary spoken-word render using generated SRT cues.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset spoken-word-cutup \\\n"
         "  --input ../cutups_qa_sources/voice/voice_phrase_a.wav \\\n"
@@ -365,7 +365,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "beat-cutup": (
         "Grid-sliced loop cutup with stutters, repeats, mutes, and beat dropouts.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset beat-cutup \\\n"
         "  --input ../cutups_qa_sources/loops \\\n"
@@ -382,7 +382,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "beat-similarity": (
         "Beat-grid render with source analysis, similarity jumps, and novelty bias.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset beat-cutup \\\n"
         "  --input ../cutups_qa_sources/loops \\\n"
@@ -399,7 +399,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "radio-intrusion": (
         "Filtered voice intrusions with hiss, ghosts, and unstable broadcast texture.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset radio-intrusion \\\n"
         "  --input ../cutups_qa_sources/voice \\\n"
@@ -410,7 +410,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "hard-stutter": (
         "Aggressive micro-fragment repetition and abrupt grid mutes.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset hard-stutter \\\n"
         "  --input ../cutups_qa_sources/loops \\\n"
@@ -426,7 +426,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     ),
     "ghost-transmission": (
         "Faint recurring voices, afterimages, dead air, and memory echoes.",
-        "python3 PY/cutup.py \\\n"
+        "cutups \\\n"
         "  --mode audio \\\n"
         "  --preset ghost-transmission \\\n"
         "  --input ../cutups_qa_sources/voice \\\n"
@@ -882,7 +882,7 @@ def print_doctor() -> None:
         print("analysis_status: ready")
     else:
         print("analysis_status: optional dependencies not installed")
-        print("analysis_install: python3 -m pip install -r requirements-analysis.txt")
+        print("analysis_install: python3 -m pip install -e '.[analysis]' or python3 -m pip install -r requirements-analysis.txt")
 
     presets = ", ".join(sorted(PRESET_VALUES))
     print(f"presets: {presets}")

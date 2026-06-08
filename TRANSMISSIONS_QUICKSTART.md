@@ -3,17 +3,17 @@
 `cutups` is meant to be run from the repo root with Python 3:
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install -e .
 ffmpeg -version
-python3 PY/cutup.py --doctor
+cutups --doctor
 ```
 
-If `ffmpeg` is missing, install it with your system package manager before using audio modes. `--doctor` reports Python, `pydub`, `ffmpeg`/`avconv`, bundled CSVs, and preset availability.
+If `ffmpeg` is missing, install it with your system package manager before using audio modes. `--doctor` reports Python, `pydub`, `ffmpeg`/`avconv`, bundled CSVs, and preset availability. The direct script form, `python3 PY/cutup.py`, still works if you do not install the package.
 
 Create starter local WAV and cue sources for the listening recipes:
 
 ```bash
-python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources
+cutups --init-qa-sources ../cutups_qa_sources
 ```
 
 This writes `loops`, `voice`, and `signal` folders. The voice folder includes `voice_phrase_a.srt` and `voice_cues.csv` for cue-slicing tests.
@@ -23,7 +23,7 @@ This writes `loops`, `voice`, and `signal` folders. The voice folder includes `v
 List the current TRANSMISSIONS presets:
 
 ```bash
-python3 PY/cutup.py --list-presets
+cutups --list-presets
 ```
 
 Presets are starting points. Any explicit CLI flag overrides the preset value.
@@ -31,7 +31,7 @@ Presets are starting points. Any explicit CLI flag overrides the preset value.
 Print a copy-ready recipe from the CLI:
 
 ```bash
-python3 PY/cutup.py --show-recipe signal-breach
+cutups --show-recipe signal-breach
 ```
 
 Use `--show-recipe all` to print every built-in recipe.

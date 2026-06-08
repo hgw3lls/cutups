@@ -38,10 +38,22 @@ from PY import cutup  # noqa: E402
 from PY import live_control_td_bridge as td_bridge  # noqa: E402
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 class LiveControlTests(unittest.TestCase):
     def test_doctor_format_check(self) -> None:
         self.assertEqual(cutup.format_check(True, "ready"), "ok - ready")
         self.assertEqual(cutup.format_check(False, "missing thing"), "missing - missing thing")
+
+    def test_pyproject_exposes_console_scripts_and_package_data(self) -> None:
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('cutups = "PY.cutup:main"', pyproject)
+        self.assertIn('cutups-live-gui = "PY.live_control_gui:main"', pyproject)
+        self.assertIn('cutups-live-monitor = "PY.live_control_monitor:main"', pyproject)
+        self.assertIn('cutups-td-bridge = "PY.live_control_td_bridge:main"', pyproject)
+        self.assertIn('PY = ["*.csv"]', pyproject)
+        self.assertTrue((REPO_ROOT / "PY" / "__init__.py").exists())
 
     def test_optional_analysis_checks_report_expected_labels(self) -> None:
         checks = cutup.optional_analysis_checks()
@@ -54,9 +66,11 @@ class LiveControlTests(unittest.TestCase):
             cutup.print_recipe("beat-similarity")
         text = out.getvalue()
         self.assertIn("## beat-similarity", text)
+        self.assertIn("cutups \\", text)
         self.assertIn("--preset beat-cutup", text)
         self.assertIn("--beat-jump-mode similarity", text)
         self.assertIn("--beat-novelty 0.35", text)
+        self.assertNotIn("python3 PY/cutup.py", text)
 
     def test_print_recipe_all_includes_qa_sources(self) -> None:
         with contextlib.redirect_stdout(io.StringIO()) as out:
