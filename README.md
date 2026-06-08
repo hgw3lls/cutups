@@ -349,7 +349,7 @@ When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`,
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
 
-For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. When overwrite is allowed, matching source/cue entries are reused and only stale or new entries are refreshed. The cache currently stores native lightweight descriptors from `pydub`; optional `librosa`/`scikit-learn` analysis is still separate.
+For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. When overwrite is allowed, matching source/cue entries are reused and only stale or new entries are refreshed. The cache currently stores native lightweight descriptors from `pydub`, including RMS/loudness and zero-crossing rate; optional `librosa`/`scikit-learn` analysis is still separate.
 
 ---
 

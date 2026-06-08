@@ -46,10 +46,9 @@ Use these projects as references, not embedded dependencies.
 
 1. Keep optional analysis dependency checks visible in `--doctor` without making them required for normal rendering.
 2. Expand native lightweight beat descriptors:
-   - duration
-   - RMS / loudness
-   - zero-crossing rate
    - spectral centroid if `librosa` is installed
+   - onset/novelty hints
+   - grid-cell summaries for loops
 3. Add beat jump planning:
    - `--beat-jump-mode random|similarity`
    - `--beat-similarity-weight`

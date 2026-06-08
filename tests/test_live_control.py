@@ -297,6 +297,35 @@ class LiveControlTests(unittest.TestCase):
                 cutup.write_analysis_cache(cache, [], args, Path(td))
             self.assertEqual(cache.read_text(encoding="utf-8"), "keep me\n")
 
+    def test_zero_crossing_rate_counts_sign_changes(self) -> None:
+        class FakeAudio:
+            channels = 1
+
+            def get_array_of_samples(self):
+                return [-1, 1, -1, 1]
+
+        self.assertEqual(cutup.zero_crossing_rate(FakeAudio()), 1.0)
+
+    def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audio_path = root / "voice.wav"
+            audio_path.write_bytes(b"placeholder")
+            args = types.SimpleNamespace(sample_rate=44100)
+            sample = cutup.SampleFile(path=audio_path, duration_ms=1000, words=1, intensity_hint=0, loop_hint=0)
+            size_bytes, mtime = cutup.audio_file_stat(audio_path)
+            entry = {
+                "cache_key": cutup.analysis_cache_key_for_sample(sample, args),
+                "path": str(audio_path),
+                "file_size_bytes": size_bytes,
+                "file_mtime": mtime,
+                "analysis_sample_rate": 44100,
+                "cue_start_ms": 0,
+                "cue_end_ms": 0,
+                "cue_index": 0,
+            }
+            self.assertFalse(cutup.cached_entry_matches_sample(entry, sample, args))
+
     def test_write_analysis_cache_reuses_matching_existing_entry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -320,6 +349,7 @@ class LiveControlTests(unittest.TestCase):
                 "cue_end_ms": 0,
                 "cue_index": 0,
                 "rms": 123,
+                "zero_crossing_rate": 0.25,
             }
             cache.write_text(
                 json.dumps(
@@ -339,6 +369,7 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(payload["cache_stats"], {"errors": 0, "refreshed": 0, "reused": 1})
             self.assertEqual(payload["samples"][0]["cache_state"], "reused")
             self.assertEqual(payload["samples"][0]["rms"], 123)
+            self.assertEqual(payload["samples"][0]["zero_crossing_rate"], 0.25)
 
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:

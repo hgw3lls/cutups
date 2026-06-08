@@ -133,7 +133,8 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 1
+ANALYSIS_CACHE_VERSION = 2
+ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate",)
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -2114,6 +2115,8 @@ def cached_analysis_entries(payload: Dict[str, object]) -> Dict[str, Dict[str, o
 def cached_entry_matches_sample(entry: Dict[str, object], sample: SampleFile, args: argparse.Namespace) -> bool:
     if str(entry.get("cache_key") or analysis_cache_key_for_entry(entry, int(args.sample_rate))) != analysis_cache_key_for_sample(sample, args):
         return False
+    if any(key not in entry for key in ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS):
+        return False
     size_bytes, mtime = audio_file_stat(sample.path)
     return (
         safe_int(str(entry.get("file_size_bytes", -1)), -1) == size_bytes
@@ -2123,6 +2126,32 @@ def cached_entry_matches_sample(entry: Dict[str, object], sample: SampleFile, ar
         and safe_int(str(entry.get("cue_index", -1)), -1) == sample.cue_index
         and safe_int(str(entry.get("analysis_sample_rate", args.sample_rate)), int(args.sample_rate)) == int(args.sample_rate)
     )
+
+
+def zero_crossing_rate(audio: Any, max_frames: int = 200000) -> float:
+    channels = max(1, int(getattr(audio, "channels", 1) or 1))
+    samples = audio.get_array_of_samples()
+    frame_count = len(samples) // channels
+    if frame_count < 2:
+        return 0.0
+    stride = max(1, int(math.ceil(frame_count / max(1, max_frames))))
+
+    last_sign = 0
+    crossings = 0
+    observed = 0
+    for frame_idx in range(0, frame_count, stride):
+        offset = frame_idx * channels
+        mixed = sum(int(samples[offset + channel]) for channel in range(channels))
+        sign = 1 if mixed > 0 else -1 if mixed < 0 else 0
+        if sign == 0:
+            continue
+        if last_sign and sign != last_sign:
+            crossings += 1
+        last_sign = sign
+        observed += 1
+    if observed < 2:
+        return 0.0
+    return round(crossings / float(observed - 1), 6)
 
 
 def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
@@ -2152,6 +2181,7 @@ def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, inde
         "rms": int(audio.rms),
         "dbfs": finite_audio_float(audio.dBFS),
         "max_dbfs": finite_audio_float(audio.max_dBFS),
+        "zero_crossing_rate": zero_crossing_rate(audio),
     }
 
 

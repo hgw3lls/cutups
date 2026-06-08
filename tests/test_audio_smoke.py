@@ -160,7 +160,7 @@ class AudioSmokeTests(unittest.TestCase):
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
-            self.assertEqual(cache["version"], 1)
+            self.assertEqual(cache["version"], 2)
             self.assertEqual(cache["grid_ms"], 125)
             self.assertEqual(cache["cache_stats"], {"errors": 0, "refreshed": 1, "reused": 0})
             self.assertEqual(len(cache["samples"]), 1)
@@ -168,6 +168,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(cache["samples"][0]["cache_state"], "fresh")
             self.assertEqual(cache["samples"][0]["channels"], 2)
             self.assertGreater(cache["samples"][0]["duration_ms"], 0)
+            self.assertGreater(cache["samples"][0]["zero_crossing_rate"], 0)
+            self.assertLessEqual(cache["samples"][0]["zero_crossing_rate"], 1)
 
     def test_audio_cli_uses_srt_cues_as_phrase_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
