@@ -114,6 +114,8 @@ class AudioSmokeTests(unittest.TestCase):
                     "1/16",
                     "--beat-jump-mode",
                     "similarity",
+                    "--beat-similarity-weight",
+                    "0.75",
                     "--stutter-rate",
                     "1",
                     "--repeat-rate",
@@ -165,6 +167,7 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(cache["version"], 6)
             self.assertEqual(cache["grid_ms"], 125)
             self.assertEqual(cache["beat_jump_mode"], "similarity")
+            self.assertEqual(cache["beat_similarity_weight"], 0.75)
             sample_fields = [
                 "duration",
                 "loudness",

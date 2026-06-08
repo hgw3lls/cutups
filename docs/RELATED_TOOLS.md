@@ -26,7 +26,7 @@ Use these projects as references, not embedded dependencies.
 - Beat-level segmentation with a reusable analysis cache.
 - Similarity clusters for musically coherent non-linear jumps.
 - Jump constraints that avoid immediate repetition.
-- A future `--beat-jump-mode similarity` path that still falls back to current random grid slicing.
+- Conservative `--beat-jump-mode similarity` behavior that falls back to weighted random source selection.
 
 ### Infinite Remixer
 
@@ -49,9 +49,7 @@ Use these projects as references, not embedded dependencies.
    - spectral centroid if `librosa` is installed
    - onset/novelty hints
 3. Refine beat jump source selection:
-   - `--beat-similarity-weight`
    - `--beat-novelty`
-   - `--analysis-cache`
 4. Add corpus/target matching for spoken-word and signal-breach workflows after beat similarity is stable.
 
 ## Non-goals

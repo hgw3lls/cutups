@@ -578,6 +578,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
     p.add_argument("--beat-jump-mode", choices=["random", "similarity"], default="random", help="Beat source jump planner. Similarity mode uses cache planning metadata when available and falls back to weighted random selection.")
+    p.add_argument("--beat-similarity-weight", type=float, default=1.0, help="Probability 0..1 of following a similarity neighbor when --beat-jump-mode similarity has an active plan.")
     p.add_argument("--stutter-rate", type=float, default=0.0, help="Beat-grid probability for retriggered stutter cells; requires active --bpm/--slice-grid.")
     p.add_argument("--mute-rate", type=float, default=0.0, help="Beat-grid probability for replacing cells with silence; requires active --bpm/--slice-grid.")
     p.add_argument("--repeat-rate", type=float, default=0.0, help="Beat-grid probability for repeating cells; requires active --bpm/--slice-grid.")
@@ -749,6 +750,8 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--bpm must be 20..300, or 0 to disable beat-grid behavior")
     if args.bpm <= 0 and args.slice_grid != "off" and "slice_grid" in getattr(args, "_explicit_args", set()):
         raise SystemExit("--slice-grid requires --bpm")
+    if not 0.0 <= args.beat_similarity_weight <= 1.0:
+        raise SystemExit("--beat-similarity-weight must be 0..1")
     if args.memory_depth < 1:
         raise SystemExit("--memory-depth must be >= 1")
     if args.cut_match_count < 1:
@@ -1207,6 +1210,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     else:
         print(f"beat_grid: inactive (bpm={args.bpm:g}, slice_grid={args.slice_grid})")
     print(f"beat_jump_mode: {args.beat_jump_mode}")
+    print(f"beat_similarity_weight: {args.beat_similarity_weight:.2f}")
     if args.beat_jump_mode == "similarity" and not analysis_cache:
         print("beat_jump_plan: enable --analysis-cache to write similarity planning metadata")
     beat_rates = beat_control_rates(args)
@@ -2436,6 +2440,7 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
         "bpm": args.bpm,
         "slice_grid": args.slice_grid,
         "beat_jump_mode": str(getattr(args, "beat_jump_mode", "random") or "random"),
+        "beat_similarity_weight": float(getattr(args, "beat_similarity_weight", 1.0)),
         "grid_ms": beat_grid_ms(args),
         "similarity_vector_fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS),
         "beat_jump_plan": build_beat_jump_plan(entries, args),
@@ -2474,6 +2479,10 @@ def choose_source_sample(
     previous_sample: Optional[SampleFile] = None,
 ) -> SampleFile:
     if beat_jump and beat_jump.active and previous_sample is not None:
+        similarity_weight = clamp(float(getattr(args, "beat_similarity_weight", 1.0)), 0.0, 1.0)
+        if random.random() > similarity_weight:
+            beat_jump.fallbacks += 1
+            return weighted_choice(samples, concrete)
         source_key = analysis_cache_key_for_sample(previous_sample, args)
         neighbor_keys = beat_jump.neighbor_keys.get(source_key, [])
         candidates = [beat_jump.samples_by_key[key] for key in neighbor_keys if key in beat_jump.samples_by_key]

@@ -106,7 +106,7 @@ python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 -
 Write a lightweight JSON source analysis cache for later inspection or future beat-similarity work:
 
 ```bash
-python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --beat-jump-mode similarity --analysis-cache auto --output out/beat_demo
+python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --beat-jump-mode similarity --beat-similarity-weight 0.7 --analysis-cache auto --output out/beat_demo
 ```
 
 Spoken-word cutups can bias toward intelligibility or rupture:
@@ -349,7 +349,7 @@ When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`,
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
 
-For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. When overwrite is allowed, matching source/cue entries are reused and only stale or new entries are refreshed. The cache currently stores native lightweight descriptors from `pydub`, including RMS/loudness, zero-crossing rate, capped grid-cell summaries when beat-grid mode is active, and a compact similarity vector for beat planning. `--beat-jump-mode similarity` uses nearest-neighbor jump suggestions from the cache when available and falls back to weighted random source selection when not. Optional `librosa`/`scikit-learn` analysis is still separate.
+For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. When overwrite is allowed, matching source/cue entries are reused and only stale or new entries are refreshed. The cache currently stores native lightweight descriptors from `pydub`, including RMS/loudness, zero-crossing rate, capped grid-cell summaries when beat-grid mode is active, and a compact similarity vector for beat planning. `--beat-jump-mode similarity` uses nearest-neighbor jump suggestions from the cache when available; `--beat-similarity-weight` blends those jumps with weighted random source selection. Optional `librosa`/`scikit-learn` analysis is still separate.
 
 ---
 
