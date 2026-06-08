@@ -165,6 +165,18 @@ QA_SOURCE_SPECS: Dict[str, Tuple[Tuple[str, float, str], ...]] = {
         ("scanline_hash.wav", 6.0, "signal_scanline"),
     ),
 }
+QA_SRT_CUES: Tuple[Tuple[int, int, int, str], ...] = (
+    (1, 400, 1600, "signal check one begins in fragments"),
+    (2, 2050, 3350, "the voice holds through the interruption"),
+    (3, 3900, 5400, "repeat the message until the carrier fails"),
+)
+QA_CSV_CUES: Tuple[Tuple[str, int, int, str], ...] = (
+    ("voice_phrase_a.wav", 400, 1600, "signal check one begins in fragments"),
+    ("voice_phrase_a.wav", 2050, 3350, "the voice holds through the interruption"),
+    ("voice_phrase_b.wav", 600, 1950, "another speaker enters the transmission"),
+    ("voice_gap_phrase.wav", 300, 1500, "silence opens inside the phrase"),
+    ("voice_gap_phrase.wav", 3100, 4950, "the last words return as broken memory"),
+)
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -641,8 +653,11 @@ def parse_args() -> argparse.Namespace:
         root = Path(parsed.init_qa_sources).expanduser().resolve()
         print(f"QA sources written under: {root}")
         for group in sorted(QA_SOURCE_SPECS):
-            count = len([path for path in written if path.parent.name == group])
+            count = len([path for path in written if path.parent.name == group and path.suffix.lower() == ".wav"])
             print(f"  {group}: {count} wav")
+        cue_count = len([path for path in written if path.suffix.lower() in {".srt", ".csv"}])
+        if cue_count:
+            print(f"  cues: {cue_count} files")
         raise SystemExit(0)
     return parsed
 
@@ -904,6 +919,45 @@ def write_pcm16_wav(path: Path, duration_s: float, sample_value: Callable[[float
         wav.writeframes(frames)
 
 
+def format_srt_timecode(ms: int) -> str:
+    total_ms = max(0, int(ms))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def write_qa_srt(path: Path) -> None:
+    blocks = []
+    for cue_index, start_ms, end_ms, text in QA_SRT_CUES:
+        blocks.append(
+            "\n".join(
+                [
+                    str(cue_index),
+                    f"{format_srt_timecode(start_ms)} --> {format_srt_timecode(end_ms)}",
+                    text,
+                ]
+            )
+        )
+    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+
+
+def write_qa_cue_csv(path: Path) -> None:
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["file", "cue_index", "start_tc", "end_tc", "text"])
+        writer.writeheader()
+        for cue_index, (filename, start_ms, end_ms, text) in enumerate(QA_CSV_CUES, start=1):
+            writer.writerow(
+                {
+                    "file": filename,
+                    "cue_index": cue_index,
+                    "start_tc": format_srt_timecode(start_ms),
+                    "end_tc": format_srt_timecode(end_ms),
+                    "text": text,
+                }
+            )
+
+
 def write_qa_sources(root: Path, overwrite: bool = False) -> List[Path]:
     root = root.expanduser().resolve()
     if root.exists() and not root.is_dir():
@@ -918,6 +972,10 @@ def write_qa_sources(root: Path, overwrite: bool = False) -> List[Path]:
             targets.append((path, duration_s, profile))
             if path.exists() and not overwrite:
                 existing.append(path)
+    cue_targets = (root / "voice" / "voice_phrase_a.srt", root / "voice" / "voice_cues.csv")
+    for path in cue_targets:
+        if path.exists() and not overwrite:
+            existing.append(path)
     if existing:
         shown = ", ".join(str(path) for path in existing[:3])
         suffix = "..." if len(existing) > 3 else ""
@@ -928,6 +986,10 @@ def write_qa_sources(root: Path, overwrite: bool = False) -> List[Path]:
         path.parent.mkdir(parents=True, exist_ok=True)
         write_pcm16_wav(path, duration_s, lambda t, idx, rng, profile=profile: qa_source_value(profile, t, idx, rng))
         written.append(path)
+    cue_targets[0].parent.mkdir(parents=True, exist_ok=True)
+    write_qa_srt(cue_targets[0])
+    write_qa_cue_csv(cue_targets[1])
+    written.extend(cue_targets)
     return written
 
 

@@ -53,16 +53,25 @@ class LiveControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "qa_sources"
             written = cutup.write_qa_sources(root, overwrite=False)
-            expected_count = sum(len(specs) for specs in cutup.QA_SOURCE_SPECS.values())
+            expected_wavs = sum(len(specs) for specs in cutup.QA_SOURCE_SPECS.values())
+            expected_count = expected_wavs + 2
             self.assertEqual(len(written), expected_count)
             self.assertEqual({path.parent.name for path in written}, {"loops", "voice", "signal"})
             self.assertTrue((root / "loops" / "drum_pulse_120.wav").exists())
+            self.assertTrue((root / "voice" / "voice_phrase_a.srt").exists())
+            self.assertTrue((root / "voice" / "voice_cues.csv").exists())
 
             with wave.open(str(written[0]), "rb") as wav:
                 self.assertEqual(wav.getnchannels(), 1)
                 self.assertEqual(wav.getsampwidth(), 2)
                 self.assertEqual(wav.getframerate(), 44100)
                 self.assertGreater(wav.getnframes(), 0)
+
+            srt_rows = cutup.parse_srt_cues(root / "voice" / "voice_phrase_a.srt")
+            csv_rows = cutup.parse_csv_cues(root / "voice" / "voice_cues.csv")
+            self.assertEqual(len(srt_rows), len(cutup.QA_SRT_CUES))
+            self.assertEqual(len(csv_rows), len(cutup.QA_CSV_CUES))
+            self.assertEqual(csv_rows[0]["file"], "voice_phrase_a.wav")
 
             with self.assertRaises(SystemExit):
                 cutup.write_qa_sources(root, overwrite=False)

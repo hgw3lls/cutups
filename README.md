@@ -74,7 +74,7 @@ Check local dependencies:
 python3 PY/cutup.py --doctor
 ```
 
-Create starter local QA sources outside the repo:
+Create starter local QA WAV/cue sources outside the repo:
 
 ```bash
 python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources

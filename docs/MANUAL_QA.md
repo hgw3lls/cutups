@@ -2,13 +2,13 @@
 
 Use these recipes to audition TRANSMISSIONS workflows after CLI or audio-engine changes. They are meant for human listening, not automated tests.
 
-Keep source audio outside the repo, and write renders to `out/`, which is ignored by git. To create starter WAV sources for every recipe:
+Keep source audio outside the repo, and write renders to `out/`, which is ignored by git. To create starter WAV and cue sources for every recipe:
 
 ```bash
 python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources
 ```
 
-The generated files are synthetic placeholders. Replace or supplement them with short loop files in `../cutups_qa_sources/loops`, spoken recordings in `../cutups_qa_sources/voice`, and noisy/radio/mixed sources in `../cutups_qa_sources/signal` for real production checks.
+The generated files are synthetic placeholders. Replace or supplement them with short loop files in `../cutups_qa_sources/loops`, spoken recordings in `../cutups_qa_sources/voice`, and noisy/radio/mixed sources in `../cutups_qa_sources/signal` for real production checks. The voice folder also includes `voice_phrase_a.srt` and `voice_cues.csv` for phrase-boundary tests.
 
 ## Preflight
 
@@ -24,7 +24,7 @@ Expected:
 - `--doctor` reports `status: ready`.
 - `--list-presets` includes `signal-breach`, `spoken-word-cutup`, `beat-cutup`, `radio-intrusion`, `hard-stutter`, and `ghost-transmission`.
 - `--help` includes beat controls such as `--beat-jump-mode`, `--beat-similarity-weight`, and `--beat-novelty`.
-- `--init-qa-sources` writes `loops`, `voice`, and `signal` WAV folders.
+- `--init-qa-sources` writes `loops`, `voice`, and `signal` WAV folders plus voice cue files.
 
 ## Beat Similarity And Novelty
 
@@ -189,10 +189,43 @@ python3 PY/cutup.py \
   --seed 311
 ```
 
+Cue-boundary SRT pass:
+
+```bash
+python3 PY/cutup.py \
+  --mode audio \
+  --preset spoken-word-cutup \
+  --input ../cutups_qa_sources/voice/voice_phrase_a.wav \
+  --cue-file ../cutups_qa_sources/voice/voice_phrase_a.srt \
+  --cue-slice-mode full \
+  --intelligibility high \
+  --output out/manual_qa/spoken_srt_cues \
+  --duration 30 \
+  --preview-duration 10 \
+  --seed 313
+```
+
+Multi-file cue CSV pass:
+
+```bash
+python3 PY/cutup.py \
+  --mode audio \
+  --preset spoken-word-cutup \
+  --input ../cutups_qa_sources/voice \
+  --cue-file ../cutups_qa_sources/voice/voice_cues.csv \
+  --cue-slice-mode fragment \
+  --intelligibility medium \
+  --output out/manual_qa/spoken_csv_cues \
+  --duration 30 \
+  --preview-duration 10 \
+  --seed 314
+```
+
 Listening notes:
 
 - `spoken_clear` should preserve phrase intelligibility and leave usable gaps.
 - `spoken_fragmented` should rupture syntax while keeping recognizably vocal material.
+- Cue passes should keep event sources inside the cue spans recorded in `cutup_01_events.csv`.
 - Silence insertion should feel like editorial pacing or transmission loss, not accidental render failure.
 
 ## Failure Triage

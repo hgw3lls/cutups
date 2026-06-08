@@ -10,11 +10,13 @@ python3 PY/cutup.py --doctor
 
 If `ffmpeg` is missing, install it with your system package manager before using audio modes. `--doctor` reports Python, `pydub`, `ffmpeg`/`avconv`, bundled CSVs, and preset availability.
 
-Create starter local WAV sources for the listening recipes:
+Create starter local WAV and cue sources for the listening recipes:
 
 ```bash
 python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources
 ```
+
+This writes `loops`, `voice`, and `signal` folders. The voice folder includes `voice_phrase_a.srt` and `voice_cues.csv` for cue-slicing tests.
 
 ## Presets
 
@@ -127,6 +129,21 @@ python3 PY/cutup.py \
 ```
 
 Use `--cue-slice-mode fragment` when you want random sub-fragments inside each cue instead of whole subtitle spans. Cue CSVs can use columns such as `file`, `start_tc`, `end_tc`, `duration_sec`, and `text`; SRT files use the single `--input` audio file.
+
+After creating QA sources, this command exercises the generated SRT cues:
+
+```bash
+python3 PY/cutup.py \
+  --mode audio \
+  --preset spoken-word-cutup \
+  --input ../cutups_qa_sources/voice/voice_phrase_a.wav \
+  --cue-file ../cutups_qa_sources/voice/voice_phrase_a.srt \
+  --cue-slice-mode full \
+  --output out/spoken_qa_cued \
+  --duration 30 \
+  --preview-duration 10 \
+  --seed 13
+```
 
 Phrase-length values: `micro`, `short`, `medium`, `long`, `auto`.
 Intelligibility values: `high`, `medium`, `low`, `auto`.
