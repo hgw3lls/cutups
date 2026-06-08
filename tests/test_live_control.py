@@ -306,6 +306,31 @@ class LiveControlTests(unittest.TestCase):
 
         self.assertEqual(cutup.zero_crossing_rate(FakeAudio()), 1.0)
 
+    def test_grid_cell_summary_caps_captured_cells(self) -> None:
+        class FakeAudio:
+            channels = 1
+            rms = 10
+            dBFS = -12.0
+
+            def __init__(self, duration_ms: int = 1000) -> None:
+                self.duration_ms = duration_ms
+
+            def __len__(self) -> int:
+                return self.duration_ms
+
+            def __getitem__(self, key):
+                return FakeAudio(max(0, int(key.stop) - int(key.start)))
+
+            def get_array_of_samples(self):
+                return [-1, 1] * max(1, self.duration_ms // 2)
+
+        summary = cutup.grid_cell_summary(FakeAudio(), grid_ms=100, max_cells=3)
+        self.assertEqual(summary["cell_count"], 10)
+        self.assertEqual(summary["captured"], 3)
+        self.assertTrue(summary["truncated"])
+        self.assertEqual(summary["cells"][0]["duration_ms"], 100)
+        self.assertEqual(summary["cells"][0]["zero_crossing_rate"], 1.0)
+
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -350,6 +375,7 @@ class LiveControlTests(unittest.TestCase):
                 "cue_index": 0,
                 "rms": 123,
                 "zero_crossing_rate": 0.25,
+                "grid_cell_summary": {"grid_ms": 125, "cell_count": 8, "captured": 8, "truncated": False, "cells": []},
             }
             cache.write_text(
                 json.dumps(
@@ -370,6 +396,7 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(payload["samples"][0]["cache_state"], "reused")
             self.assertEqual(payload["samples"][0]["rms"], 123)
             self.assertEqual(payload["samples"][0]["zero_crossing_rate"], 0.25)
+            self.assertEqual(payload["samples"][0]["grid_cell_summary"]["grid_ms"], 125)
 
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:

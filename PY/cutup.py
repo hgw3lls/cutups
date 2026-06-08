@@ -133,8 +133,9 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 2
-ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate",)
+ANALYSIS_CACHE_VERSION = 3
+ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary")
+ANALYSIS_GRID_CELL_MAX_CELLS = 512
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -2154,9 +2155,43 @@ def zero_crossing_rate(audio: Any, max_frames: int = 200000) -> float:
     return round(crossings / float(observed - 1), 6)
 
 
+def grid_cell_summary(audio: Any, grid_ms: int, max_cells: int = ANALYSIS_GRID_CELL_MAX_CELLS) -> Dict[str, object]:
+    if grid_ms <= 0 or len(audio) <= 0:
+        return {"grid_ms": 0, "cell_count": 0, "captured": 0, "truncated": False, "cells": []}
+
+    total_cells = int(math.ceil(len(audio) / float(grid_ms)))
+    capture_count = min(total_cells, max(0, max_cells))
+    cells: List[Dict[str, object]] = []
+    for idx in range(capture_count):
+        start_ms = idx * grid_ms
+        end_ms = min(len(audio), start_ms + grid_ms)
+        if end_ms <= start_ms:
+            continue
+        cell = audio[start_ms:end_ms]
+        cells.append(
+            {
+                "index": idx,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "duration_ms": end_ms - start_ms,
+                "rms": int(cell.rms),
+                "dbfs": finite_audio_float(cell.dBFS),
+                "zero_crossing_rate": zero_crossing_rate(cell),
+            }
+        )
+    return {
+        "grid_ms": grid_ms,
+        "cell_count": total_cells,
+        "captured": len(cells),
+        "truncated": total_cells > len(cells),
+        "cells": cells,
+    }
+
+
 def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
     audio = source_audio_for_sample(sample, args)
     size_bytes, mtime = audio_file_stat(sample.path)
+    grid_ms = beat_grid_ms(args)
     return {
         "index": index,
         "cache_key": analysis_cache_key_for_sample(sample, args),
@@ -2182,6 +2217,7 @@ def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, inde
         "dbfs": finite_audio_float(audio.dBFS),
         "max_dbfs": finite_audio_float(audio.max_dBFS),
         "zero_crossing_rate": zero_crossing_rate(audio),
+        "grid_cell_summary": grid_cell_summary(audio, grid_ms),
     }
 
 

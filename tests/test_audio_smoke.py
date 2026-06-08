@@ -160,16 +160,23 @@ class AudioSmokeTests(unittest.TestCase):
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
-            self.assertEqual(cache["version"], 2)
+            self.assertEqual(cache["version"], 3)
             self.assertEqual(cache["grid_ms"], 125)
             self.assertEqual(cache["cache_stats"], {"errors": 0, "refreshed": 1, "reused": 0})
             self.assertEqual(len(cache["samples"]), 1)
-            self.assertEqual(cache["samples"][0]["basename"], source.name)
-            self.assertEqual(cache["samples"][0]["cache_state"], "fresh")
-            self.assertEqual(cache["samples"][0]["channels"], 2)
-            self.assertGreater(cache["samples"][0]["duration_ms"], 0)
-            self.assertGreater(cache["samples"][0]["zero_crossing_rate"], 0)
-            self.assertLessEqual(cache["samples"][0]["zero_crossing_rate"], 1)
+            sample = cache["samples"][0]
+            self.assertEqual(sample["basename"], source.name)
+            self.assertEqual(sample["cache_state"], "fresh")
+            self.assertEqual(sample["channels"], 2)
+            self.assertGreater(sample["duration_ms"], 0)
+            self.assertGreater(sample["zero_crossing_rate"], 0)
+            self.assertLessEqual(sample["zero_crossing_rate"], 1)
+            self.assertEqual(sample["grid_cell_summary"]["grid_ms"], 125)
+            self.assertEqual(sample["grid_cell_summary"]["cell_count"], 24)
+            self.assertEqual(sample["grid_cell_summary"]["captured"], 24)
+            self.assertFalse(sample["grid_cell_summary"]["truncated"])
+            self.assertIn("rms", sample["grid_cell_summary"]["cells"][0])
+            self.assertIn("zero_crossing_rate", sample["grid_cell_summary"]["cells"][0])
 
     def test_audio_cli_uses_srt_cues_as_phrase_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
