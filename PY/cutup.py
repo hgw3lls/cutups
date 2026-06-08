@@ -20,6 +20,7 @@ import csv
 import importlib
 import importlib.util
 import json
+import math
 import platform
 import random
 import re
@@ -132,6 +133,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
+ANALYSIS_CACHE_VERSION = 1
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -527,6 +529,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
+    p.add_argument("--analysis-cache", default="", help="Write a lightweight JSON source analysis cache for audio mode. Use 'auto' for output/audio_analysis_cache.json.")
 
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
     p.add_argument("--cue-file", default="", help="Optional SRT or CSV cue file for phrase-aware audio slicing.")
@@ -1141,6 +1144,15 @@ def resolve_output_root(raw_output: str, overwrite: bool) -> Path:
     return safe_root
 
 
+def resolve_analysis_cache_path(raw_cache: str, output_root: Path) -> Optional[Path]:
+    text = str(raw_cache or "").strip()
+    if not text:
+        return None
+    if text.lower() == "auto":
+        return output_root / "audio_analysis_cache.json"
+    return Path(text).expanduser().resolve()
+
+
 def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print("=== CUTUP DRY RUN ===")
     print(f"mode: {args.mode}")
@@ -1149,6 +1161,8 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"output: {output_root}")
     print(f"duration: {args.duration}s")
     print(f"preview_duration: {args.preview_duration}s" if args.preview_duration > 0 else "preview_duration: off")
+    analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
+    print(f"analysis_cache: {analysis_cache if analysis_cache else 'off'}")
     print(f"variants: {args.variants}")
     print(f"density: {args.density}")
     print(f"sectional: {args.sectional}")
@@ -2032,6 +2046,79 @@ def discover_cue_samples(input_root: Path, cue_file: Path) -> Tuple[List[SampleF
     return samples, skipped
 
 
+def finite_audio_float(value: float) -> Optional[float]:
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return round(number, 3)
+
+
+def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
+    audio = source_audio_for_sample(sample, args)
+    try:
+        stat = sample.path.stat()
+        size_bytes = stat.st_size
+        mtime = int(stat.st_mtime)
+    except OSError:
+        size_bytes = 0
+        mtime = 0
+    return {
+        "index": index,
+        "path": str(sample.path),
+        "basename": sample.path.name,
+        "suffix": sample.path.suffix.lower(),
+        "file_size_bytes": size_bytes,
+        "file_mtime": mtime,
+        "duration_ms": len(audio),
+        "cue_start_ms": sample.cue_start_ms,
+        "cue_end_ms": sample.cue_end_ms,
+        "cue_index": sample.cue_index,
+        "cue_text": sample.cue_text,
+        "words": sample.words,
+        "intensity_hint": sample.intensity_hint,
+        "loop_hint": sample.loop_hint,
+        "frame_rate": audio.frame_rate,
+        "channels": audio.channels,
+        "sample_width": audio.sample_width,
+        "rms": int(audio.rms),
+        "dbfs": finite_audio_float(audio.dBFS),
+        "max_dbfs": finite_audio_float(audio.max_dBFS),
+    }
+
+
+def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.Namespace, input_root: Path) -> Path:
+    if path.exists() and path.is_dir():
+        raise SystemExit(f"--analysis-cache path is a directory: {path}")
+    if path.exists() and not args.overwrite:
+        raise SystemExit(f"--analysis-cache already exists: {path}. Pass --overwrite or choose a new path.")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SystemExit(f"Failed to create analysis cache folder '{path.parent}': {exc}") from exc
+
+    entries: List[Dict[str, object]] = []
+    errors: List[Dict[str, str]] = []
+    for index, sample in enumerate(samples, start=1):
+        try:
+            entries.append(analysis_entry_for_sample(sample, args, index))
+        except Exception as exc:
+            errors.append({"path": str(sample.path), "error": str(exc)})
+
+    payload = {
+        "version": ANALYSIS_CACHE_VERSION,
+        "kind": "cutups.audio_analysis_cache",
+        "input": str(input_root),
+        "sample_rate": args.sample_rate,
+        "bpm": args.bpm,
+        "slice_grid": args.slice_grid,
+        "grid_ms": beat_grid_ms(args),
+        "samples": entries,
+        "errors": errors,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def choose_event_count(duration_s: float, density: str, sectional: bool) -> int:
     base = {"sparse": 24, "medium": 44, "dense": 74}[density]
     if sectional:
@@ -2740,6 +2827,12 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
     if unreadable:
         source = Path(args.cue_file).expanduser().resolve() if args.cue_file else input_root
         print(f"Warning: skipped {unreadable} unusable audio/cue row(s) while scanning {source}")
+
+    analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
+    if analysis_cache:
+        cache_path = write_analysis_cache(analysis_cache, samples, args, input_root)
+        summary.output_paths.append(str(cache_path))
+        print(f"Analysis cache written: {cache_path}")
 
     audio_out = output_root / "audio_cutups"
     audio_out.mkdir(parents=True, exist_ok=True)

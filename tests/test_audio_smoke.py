@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import json
 import math
 import shutil
 import struct
@@ -125,6 +126,8 @@ class AudioSmokeTests(unittest.TestCase):
                     "3",
                     "--preview-duration",
                     "1",
+                    "--analysis-cache",
+                    "auto",
                     "--seed",
                     "101",
                     "--overwrite",
@@ -137,7 +140,8 @@ class AudioSmokeTests(unittest.TestCase):
             preview = variant / "cutup_01_preview.wav"
             events = variant / "cutup_01_events.csv"
             score = variant / "cutup_01_score.txt"
-            for path in (master, preview, events, score):
+            analysis_cache = output / "audio_analysis_cache.json"
+            for path in (master, preview, events, score, analysis_cache):
                 self.assertTrue(path.exists(), path)
 
             self.assertEqual(_wav_info(master)[:2], (2, 44100))
@@ -150,6 +154,15 @@ class AudioSmokeTests(unittest.TestCase):
             transforms = " ".join(row["transformation"] for row in rows)
             for tag in ("+grid", "+beatstutter", "+beatmute", "+beatrepeat", "+beatdrop"):
                 self.assertIn(tag, transforms)
+
+            cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
+            self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
+            self.assertEqual(cache["version"], 1)
+            self.assertEqual(cache["grid_ms"], 125)
+            self.assertEqual(len(cache["samples"]), 1)
+            self.assertEqual(cache["samples"][0]["basename"], source.name)
+            self.assertEqual(cache["samples"][0]["channels"], 2)
+            self.assertGreater(cache["samples"][0]["duration_ms"], 0)
 
     def test_audio_cli_uses_srt_cues_as_phrase_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:

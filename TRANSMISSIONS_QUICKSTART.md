@@ -158,6 +158,8 @@ python3 PY/cutup.py \
 
 Useful grid values: `1/4`, `1/8`, `1/16`, `1/32`, `1/8t`, `1/16t`. Grid mode quantizes source slice lengths and event starts, while repeats, ghosts, reversals, and gaps can still disrupt the loop.
 
+Add `--analysis-cache auto` to write `audio_analysis_cache.json` under the output folder. It captures source/cue identity, duration, RMS/loudness, channels, sample rate, and beat-grid context for inspection and future similarity planning.
+
 Beat controls only act when the grid is active:
 
 - `--stutter-rate 0..1`: retriggers tiny pieces inside grid cells.
@@ -211,6 +213,8 @@ python3 PY/cutup.py \
 By default, if the requested output folder already exists and contains files, `cutups` writes to a numbered sibling such as `out/signal_breach_02`. Use `--overwrite` only when you intentionally want to render into an existing non-empty folder.
 
 Use `--preview-duration <seconds>` to write a short `cutup_XX_preview.wav` beside each full master for fast auditioning.
+
+Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`.
 
 ## Validation
 

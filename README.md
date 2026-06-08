@@ -103,6 +103,12 @@ Beat-oriented cutups can use manual grid slicing:
 python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --stutter-rate 0.55 --repeat-rate 0.45 --mute-rate 0.2 --beat-dropout-rate 0.15 --output out/beat_demo
 ```
 
+Write a lightweight JSON source analysis cache for later inspection or future beat-similarity work:
+
+```bash
+python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --analysis-cache auto --output out/beat_demo
+```
+
 Spoken-word cutups can bias toward intelligibility or rupture:
 
 ```bash
@@ -336,11 +342,14 @@ Inside your `--output` directory you will usually see:
 - `audio_cutups/cutup_XX/cutup_XX_preview.wav` (when `--preview-duration` is set)
 - `audio_cutups/cutup_XX/cutup_XX_events.csv`
 - `audio_cutups/cutup_XX/cutup_XX_score.txt`
+- `audio_analysis_cache.json` (when `--analysis-cache auto` is set)
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
 
 When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`, `source_cue_end_ms`, and `source_cue_text`.
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
+
+For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. The cache currently stores native lightweight descriptors from `pydub`; optional `librosa`/`scikit-learn` analysis is still separate.
 
 ---
 

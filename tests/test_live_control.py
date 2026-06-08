@@ -280,6 +280,23 @@ class LiveControlTests(unittest.TestCase):
             (out / "existing.txt").write_text("keep me", encoding="utf-8")
             self.assertEqual(cutup.resolve_output_root(str(out), overwrite=True), out.resolve())
 
+    def test_resolve_analysis_cache_path_supports_auto_and_explicit_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            self.assertIsNone(cutup.resolve_analysis_cache_path("", root))
+            self.assertEqual(cutup.resolve_analysis_cache_path("auto", root), root / "audio_analysis_cache.json")
+            explicit = root / "cache" / "sources.json"
+            self.assertEqual(cutup.resolve_analysis_cache_path(str(explicit), root), explicit)
+
+    def test_write_analysis_cache_refuses_existing_file_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td) / "sources.json"
+            cache.write_text("keep me\n", encoding="utf-8")
+            args = types.SimpleNamespace(overwrite=False, sample_rate=44100, bpm=0.0, slice_grid="off")
+            with self.assertRaises(SystemExit):
+                cutup.write_analysis_cache(cache, [], args, Path(td))
+            self.assertEqual(cache.read_text(encoding="utf-8"), "keep me\n")
+
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             control_path = Path(td) / "live.json"
