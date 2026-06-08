@@ -86,7 +86,7 @@ Render a short audition file beside the full master:
 python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --output out/breach_preview --preview-duration 12
 ```
 
-See [TRANSMISSIONS_QUICKSTART.md](TRANSMISSIONS_QUICKSTART.md) for signal-breach, spoken-word, beat-cutup, radio-intrusion, hard-stutter, and ghost-transmission recipes.
+See [TRANSMISSIONS_QUICKSTART.md](TRANSMISSIONS_QUICKSTART.md) for signal-breach, spoken-word, beat-cutup, radio-intrusion, hard-stutter, and ghost-transmission recipes. See [docs/MANUAL_QA.md](docs/MANUAL_QA.md) for repeatable listening checks after changes.
 
 Available preset names:
 

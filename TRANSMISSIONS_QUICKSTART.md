@@ -218,6 +218,8 @@ Use `--preview-duration <seconds>` to write a short `cutup_XX_preview.wav` besid
 
 Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again.
 
+For repeatable listening checks after changes, use [docs/MANUAL_QA.md](docs/MANUAL_QA.md).
+
 ## Validation
 
 Run the full test suite from the repo root:
