@@ -208,6 +208,19 @@ Use `--source-diversity 0.0..1.0` when a render overuses one file from a larger 
 
 Use `--source-score off|spoken|beat|breach` to bias which source is selected before slicing and placement. This uses local metadata only: duration, cue word counts, cue text, file names, intensity hints, loop hints, and the current section. Presets enable the appropriate mode automatically, and `--source-score off` restores unscored source weighting.
 
+## Source Manifest
+
+Use `--source-manifest ./sources.csv` or `--source-manifest ./sources.json` when a mixed dataset needs explicit labels. CSV columns can include `file`, `role`, `tags`, `intensity`, `loop_hint`, `words`, and `weight`.
+
+```csv
+file,role,tags,intensity,loop_hint,words,weight
+voice/interview_01.wav,spoken,"voice,interview,clear",1,0,12,1.2
+loops/drum_loop_120.wav,beat,"drum,loop,pulse",0,3,1,1.4
+signal/radio_static.wav,breach,"radio,static,dropout",3,0,1,1.8
+```
+
+Manifest labels feed `--source-score`, `cutup_XX_events.csv`, `cutup_XX_plan.json`, and `audio_analysis_cache.json`.
+
 ## Section Arcs
 
 Use `--section-arc classic|spoken|breach|pulse|ghost` with `--sectional` to choose the composition curve across ENTRY, BUILD, PRESSURE, COLLAPSE, and AFTERIMAGE. Presets choose an arc automatically; override it when you want a spoken-word render to breach harder, or a signal render to hold back.

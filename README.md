@@ -147,6 +147,8 @@ Use `--source-diversity 0.0..1.0` to penalize immediate and repeated source reus
 
 Use `--source-score off|spoken|beat|breach` to bias source choice toward the material a workflow needs before placement. Presets enable this automatically: spoken-word favors cue/phrase-like sources, beat cutups favor loop/grid material, and breach presets favor noise, radio, static, dropout, or high-intensity sources.
 
+Use `--source-manifest ./sources.csv` or `--source-manifest ./sources.json` to label mixed datasets explicitly. A CSV can include `file`, `role`, `tags`, `intensity`, `loop_hint`, `words`, and `weight`; those labels feed source scoring, plan diagnostics, and the analysis cache.
+
 Use `--section-arc classic|spoken|breach|pulse|ghost` with `--sectional` to choose the render's energy curve. Presets set workflow-specific arcs, and each `cutup_XX_plan.json` records the selected arc plus per-section target probabilities.
 
 Use subtitle or cue files to cut on phrase boundaries:

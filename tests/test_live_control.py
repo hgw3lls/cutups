@@ -91,6 +91,9 @@ class LiveControlTests(unittest.TestCase):
             source_cue_start_ms=100,
             source_cue_end_ms=700,
             source_cue_text="testing one phrase",
+            source_manifest_tags="spoken,voice",
+            source_manifest_role="spoken",
+            source_manifest_weight=1.5,
             start_ms=250,
             end_ms=850,
             fragment_duration_ms=600,
@@ -148,9 +151,13 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["config"]["section_arc"], "spoken")
         self.assertEqual(plan["config"]["source_score"], "spoken")
         self.assertEqual(plan["config"]["source_diversity"], 0.65)
+        self.assertEqual(plan["config"]["source_manifest"], "")
+        self.assertEqual(plan["config"]["source_manifest_matches"], 0)
+        self.assertEqual(plan["events"][0]["source_manifest_role"], "spoken")
         self.assertEqual(plan["events"][0]["transform_tags"], ["slice", "grid"])
         self.assertEqual(plan["events"][0]["planner"]["selection_reason"], "weighted_source")
         self.assertEqual(plan["events"][0]["planner"]["source_weight"]["source_score_mode"], "spoken")
+        self.assertEqual(plan["events"][0]["planner"]["source_weight"]["manifest_weight"], 1.5)
         self.assertEqual(plan["events"][0]["planner"]["source_weight"]["final_weight"], 3.264)
         self.assertEqual(plan["events"][0]["planner"]["source_weight"]["use_count_before"], 2)
         self.assertTrue(plan["events"][0]["planner"]["source_weight"]["immediate_repeat"])
@@ -347,6 +354,42 @@ class LiveControlTests(unittest.TestCase):
         self.assertGreater(cutup.source_material_score(voice, spoken_args), cutup.source_material_score(noise, spoken_args))
         self.assertGreater(cutup.source_material_score(loop, beat_args), cutup.source_material_score(voice, beat_args))
         self.assertGreater(cutup.source_material_score(noise, breach_args, profile=pressure), cutup.source_material_score(voice, breach_args, profile=pressure))
+
+    def test_source_manifest_enriches_sample_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audio_path = root / "voice_phrase.wav"
+            audio_path.write_bytes(b"placeholder")
+            manifest = root / "sources.csv"
+            manifest.write_text(
+                "file,role,tags,intensity,loop_hint,words,weight\n"
+                "voice_phrase.wav,spoken,\"voice,interview\",2,3,9,1.75\n",
+                encoding="utf-8",
+            )
+            samples = [cutup.SampleFile(path=audio_path, duration_ms=1800, words=1, intensity_hint=0, loop_hint=0)]
+            entries = cutup.load_source_manifest(manifest, root)
+            matched = cutup.apply_source_manifest(samples, entries, root)
+        self.assertEqual(matched, 1)
+        self.assertEqual(samples[0].manifest_role, "spoken")
+        self.assertEqual(samples[0].manifest_tags, "interview,spoken,voice")
+        self.assertEqual(samples[0].intensity_hint, 2)
+        self.assertEqual(samples[0].loop_hint, 3)
+        self.assertEqual(samples[0].words, 9)
+        self.assertEqual(samples[0].manifest_weight, 1.75)
+
+    def test_source_manifest_json_sources_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "sources.json"
+            manifest.write_text(
+                json.dumps({"sources": [{"file": "signal/dropout.wav", "type": "breach", "tags": "radio,dropout", "weight": 2.0}]}),
+                encoding="utf-8",
+            )
+            entries = cutup.load_source_manifest(manifest, root)
+        self.assertIn("dropout.wav", entries)
+        self.assertEqual(entries["dropout.wav"]["role"], "breach")
+        self.assertEqual(entries["dropout.wav"]["tags"], "breach,dropout,radio")
+        self.assertEqual(entries["dropout.wav"]["weight"], 2.0)
 
     def test_source_selection_diagnostics_report_weight_context(self) -> None:
         sample = cutup.SampleFile(path=Path("radio_static_dropout.wav"), duration_ms=900, words=1, intensity_hint=3, loop_hint=0)

@@ -145,6 +145,12 @@ DEFAULT_FULL_CSV = SCRIPT_DIR / "transmissions_full_subtitles.csv"
 
 TEXT_COLUMN_CANDIDATES = ["text", "subtitle", "line", "transcript", "content"]
 FILE_COLUMN_CANDIDATES = ["file", "filename", "source_file"]
+MANIFEST_FILE_COLUMN_CANDIDATES = ["file", "filename", "source_file", "path", "source", "audio"]
+MANIFEST_ROLE_COLUMN_CANDIDATES = ["role", "type", "kind", "category", "source_type"]
+MANIFEST_TAG_COLUMN_CANDIDATES = ["tags", "tag", "labels", "label", "keywords"]
+MANIFEST_WEIGHT_COLUMN_CANDIDATES = ["weight", "source_weight", "priority"]
+MANIFEST_LOOP_COLUMN_CANDIDATES = ["loop_hint", "loop", "loop_score", "rhythm"]
+MANIFEST_WORD_COLUMN_CANDIDATES = ["words", "word_count", "phrase_words"]
 CLIP_ID_COLUMN_CANDIDATES = ["clip_id", "clip", "id"]
 CUE_COLUMN_CANDIDATES = ["cue_index", "cue", "index"]
 START_TC_COLUMN_CANDIDATES = ["start_tc", "start", "in", "time_in"]
@@ -172,7 +178,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 7
+ANALYSIS_CACHE_VERSION = 8
 AUDIO_PLAN_VERSION = 2
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
@@ -542,6 +548,9 @@ class SampleFile:
     cue_end_ms: int = 0
     cue_text: str = ""
     cue_index: int = 0
+    manifest_tags: str = ""
+    manifest_role: str = ""
+    manifest_weight: float = 1.0
 
     def has_cue(self) -> bool:
         return self.cue_end_ms > self.cue_start_ms
@@ -566,6 +575,9 @@ class Event:
     source_cue_start_ms: int
     source_cue_end_ms: int
     source_cue_text: str
+    source_manifest_tags: str
+    source_manifest_role: str
+    source_manifest_weight: float
     start_ms: int
     end_ms: int
     fragment_duration_ms: int
@@ -598,6 +610,7 @@ class Event:
 EVENT_CSV_FIELDS = [
     "layer", "section", "source", "source_basename", "source_duration_ms",
     "source_cue_start_ms", "source_cue_end_ms", "source_cue_text",
+    "source_manifest_tags", "source_manifest_role", "source_manifest_weight",
     "start_ms", "end_ms", "fragment_duration_ms", "gain_db",
     "reversed", "speed", "repeated", "hp_hz", "lp_hz",
     "grain_mode", "from_memory", "transformation", "layer_role",
@@ -797,6 +810,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
     p.add_argument("--cue-file", default="", help="Optional SRT or CSV cue file for phrase-aware audio slicing.")
     p.add_argument("--cue-slice-mode", choices=["full", "fragment"], default="full", help="Use full cue spans or random fragments inside each cue when --cue-file is set.")
+    p.add_argument("--source-manifest", default="", help="Optional CSV/JSON file labeling audio sources with tags, role/type, intensity, loop hints, words, or weight.")
     p.add_argument("--duration", type=float, default=90.0, help="Composition duration in seconds.")
     p.add_argument("--variants", type=int, default=1, help="Number of rendered variants.")
     p.add_argument("--sample-rate", type=int, default=44100, help="Export sample rate.")
@@ -1038,6 +1052,14 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--agitprop-count, --broadcast-count, and --chant-count must be >= 1")
     if args.live_control_poll_ms < 30:
         raise SystemExit("--live-control-poll-ms must be >= 30")
+    if args.source_manifest:
+        manifest_path = Path(args.source_manifest).expanduser().resolve()
+        if not manifest_path.exists():
+            raise SystemExit(f"--source-manifest not found: {manifest_path}")
+        if not manifest_path.is_file():
+            raise SystemExit(f"--source-manifest must be a CSV or JSON file: {manifest_path}")
+        if manifest_path.suffix.lower() not in {".csv", ".json"}:
+            raise SystemExit("--source-manifest must be a .csv or .json file")
 
     args.silence_insert_range_ms = parse_silence_insert_ms(args.silence_insert_ms)
     args.min_frag = max(0.01, args.min_frag)
@@ -1582,6 +1604,133 @@ def cue_loop_hint(duration_ms: int) -> int:
     return 0
 
 
+def split_manifest_tags(raw: object) -> List[str]:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return []
+    parts = re.split(r"[,;|]", text)
+    tags = [re.sub(r"\s+", "-", part.strip()) for part in parts if part.strip()]
+    return sorted({tag for tag in tags if tag})
+
+
+def manifest_row_text(row: Dict[str, object]) -> Dict[str, str]:
+    return {str(key): "" if value is None else str(value) for key, value in row.items()}
+
+
+def manifest_entry_from_row(row: Dict[str, object]) -> Tuple[str, Dict[str, object]]:
+    text_row = manifest_row_text(row)
+    raw_file = get_first_present(text_row, MANIFEST_FILE_COLUMN_CANDIDATES, "")
+    if not raw_file:
+        return "", {}
+    role = get_first_present(text_row, MANIFEST_ROLE_COLUMN_CANDIDATES, "").strip().lower()
+    tags = split_manifest_tags(get_first_present(text_row, MANIFEST_TAG_COLUMN_CANDIDATES, ""))
+    if role:
+        tags = sorted({*tags, role})
+    return raw_file, {
+        "tags": ",".join(tags),
+        "role": role,
+        "weight": clamp(safe_float(get_first_present(text_row, MANIFEST_WEIGHT_COLUMN_CANDIDATES, "1.0"), 1.0), 0.05, 20.0),
+        "intensity_hint": max(0, safe_int(get_first_present(text_row, INTENSITY_COLUMN_CANDIDATES, "0"), 0)),
+        "loop_hint": max(0, safe_int(get_first_present(text_row, MANIFEST_LOOP_COLUMN_CANDIDATES, "0"), 0)),
+        "words": max(0, safe_int(get_first_present(text_row, MANIFEST_WORD_COLUMN_CANDIDATES, "0"), 0)),
+    }
+
+
+def source_manifest_keys_for_raw(raw_file: str, input_root: Path, manifest_path: Path) -> Set[str]:
+    text = str(raw_file or "").strip()
+    if not text:
+        return set()
+    keys = {text, text.replace("\\", "/"), Path(text).name}
+    raw_path = Path(text).expanduser()
+    candidates: List[Path] = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.append((input_root if input_root.is_dir() else input_root.parent) / raw_path)
+        candidates.append(manifest_path.parent / raw_path)
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate.absolute()
+        keys.add(str(resolved))
+        keys.add(resolved.name)
+        try:
+            keys.add(str(resolved.relative_to(input_root if input_root.is_dir() else input_root.parent)))
+        except ValueError:
+            pass
+    return {key for key in keys if key}
+
+
+def sample_manifest_keys(sample: SampleFile, input_root: Path) -> Set[str]:
+    keys = {str(sample.path), sample.path.name}
+    try:
+        keys.add(str(sample.path.resolve()))
+    except OSError:
+        pass
+    roots = [input_root if input_root.is_dir() else input_root.parent, input_root.parent]
+    for root in roots:
+        try:
+            keys.add(str(sample.path.relative_to(root)))
+        except ValueError:
+            pass
+    return {key for key in keys if key}
+
+
+def load_source_manifest(path: Path, input_root: Path) -> Dict[str, Dict[str, object]]:
+    suffix = path.suffix.lower()
+    rows: List[Dict[str, object]] = []
+    if suffix == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                raise SystemExit(f"Source manifest CSV '{path}' has no header row.")
+            rows = [dict(row) for row in reader]
+    elif suffix == ".json":
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Source manifest JSON could not be parsed: {path}: {exc}") from exc
+        if isinstance(payload, dict):
+            raw_rows = payload.get("sources", payload.get("files", payload))
+            if isinstance(raw_rows, dict):
+                rows = [dict({"file": str(key)}, **{str(k): v for k, v in value.items()}) for key, value in raw_rows.items() if isinstance(value, dict)]
+            elif isinstance(raw_rows, list):
+                rows = [row for row in raw_rows if isinstance(row, dict)]
+        elif isinstance(payload, list):
+            rows = [row for row in payload if isinstance(row, dict)]
+    else:
+        raise SystemExit("--source-manifest must be a .csv or .json file")
+
+    entries: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        raw_file, entry = manifest_entry_from_row(row)
+        if not raw_file or not entry:
+            continue
+        for key in source_manifest_keys_for_raw(raw_file, input_root, path):
+            entries[key] = dict(entry)
+    return entries
+
+
+def apply_source_manifest(samples: List[SampleFile], entries: Dict[str, Dict[str, object]], input_root: Path) -> int:
+    matched = 0
+    for sample in samples:
+        entry = next((entries[key] for key in sample_manifest_keys(sample, input_root) if key in entries), None)
+        if not entry:
+            continue
+        matched += 1
+        tags = sorted({*split_manifest_tags(sample.manifest_tags), *split_manifest_tags(entry.get("tags", ""))})
+        sample.manifest_tags = ",".join(tags)
+        sample.manifest_role = str(entry.get("role", "") or sample.manifest_role)
+        sample.manifest_weight = clamp(safe_float(str(entry.get("weight", sample.manifest_weight)), sample.manifest_weight), 0.05, 20.0)
+        sample.intensity_hint = max(sample.intensity_hint, int(entry.get("intensity_hint", 0) or 0))
+        sample.loop_hint = max(sample.loop_hint, int(entry.get("loop_hint", 0) or 0))
+        words = int(entry.get("words", 0) or 0)
+        if words > 0:
+            sample.words = words
+    return matched
+
+
 def is_nonempty_dir(path: Path) -> bool:
     try:
         return path.is_dir() and any(path.iterdir())
@@ -1630,6 +1779,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"preview_duration: {args.preview_duration}s" if args.preview_duration > 0 else "preview_duration: off")
     analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
     print(f"analysis_cache: {analysis_cache if analysis_cache else 'off'}")
+    print(f"source_manifest: {Path(args.source_manifest).expanduser().resolve() if args.source_manifest else 'off'}")
     print(f"variants: {args.variants}")
     print(f"density: {args.density}")
     print(f"sectional: {args.sectional}")
@@ -2832,6 +2982,9 @@ def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, inde
         "words": sample.words,
         "intensity_hint": sample.intensity_hint,
         "loop_hint": sample.loop_hint,
+        "manifest_tags": sample.manifest_tags,
+        "manifest_role": sample.manifest_role,
+        "manifest_weight": round(float(sample.manifest_weight), 6),
         "frame_rate": audio.frame_rate,
         "channels": audio.channels,
         "sample_width": audio.sample_width,
@@ -2924,7 +3077,7 @@ def source_score_mode(args: argparse.Namespace) -> str:
 
 
 def source_text_blob(sample: SampleFile) -> str:
-    return f"{sample.path.stem} {sample.path.parent.name} {sample.cue_text}".lower()
+    return f"{sample.path.stem} {sample.path.parent.name} {sample.manifest_role} {sample.manifest_tags} {sample.cue_text}".lower()
 
 
 def keyword_hits(text: str, keywords: Sequence[str]) -> int:
@@ -3004,6 +3157,7 @@ def source_weight_components(
     profile: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     base = base_source_weight(sample, concrete)
+    manifest_weight = clamp(float(getattr(sample, "manifest_weight", 1.0) or 1.0), 0.05, 20.0)
     material = source_material_score(sample, args, profile=profile) if args is not None else 1.0
     diversity = (
         source_diversity_multiplier(
@@ -3018,9 +3172,10 @@ def source_weight_components(
     )
     return {
         "base_weight": round(base, 6),
+        "manifest_weight": round(manifest_weight, 6),
         "material_score": round(material, 6),
         "diversity_multiplier": round(diversity, 6),
-        "final_weight": round(max(0.01, base * material * diversity), 6),
+        "final_weight": round(max(0.01, base * manifest_weight * material * diversity), 6),
     }
 
 
@@ -3116,7 +3271,10 @@ def choose_similarity_neighbor(
         weights.append(
             max(
                 0.01,
-                novelty_weight * float(components["material_score"]) * float(components["diversity_multiplier"]),
+                novelty_weight
+                * float(components["manifest_weight"])
+                * float(components["material_score"])
+                * float(components["diversity_multiplier"]),
             )
         )
     return random.choices(pool, weights=weights, k=1)[0]
@@ -3623,6 +3781,7 @@ def event_plan_row(event: Event, index: int) -> Dict[str, object]:
         "source_weight": {
             "source_score_mode": row.pop("source_score_mode", "off"),
             "base_weight": row.pop("source_base_weight", 0.0),
+            "manifest_weight": row.get("source_manifest_weight", 1.0),
             "material_score": row.pop("source_material_score", 1.0),
             "diversity_multiplier": row.pop("source_diversity_multiplier", 1.0),
             "final_weight": row.pop("source_final_weight", 0.0),
@@ -3703,6 +3862,8 @@ def build_audio_plan(
             "arrangement_style": str(args.arrangement_style),
             "source_score": source_score_mode(args),
             "source_diversity": float(args.source_diversity),
+            "source_manifest": str(getattr(args, "source_manifest", "") or ""),
+            "source_manifest_matches": int(getattr(args, "source_manifest_matches", 0) or 0),
             "concrete": bool(args.concrete),
             "bed_noise": bool(args.bed_noise),
             "sample_rate": int(args.sample_rate),
@@ -3993,6 +4154,9 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 source_cue_start_ms=sample.cue_start_ms,
                 source_cue_end_ms=sample.cue_end_ms,
                 source_cue_text=sample.cue_text,
+                source_manifest_tags=sample.manifest_tags,
+                source_manifest_role=sample.manifest_role,
+                source_manifest_weight=round(float(sample.manifest_weight), 6),
                 start_ms=pos,
                 end_ms=pos + len(shaped),
                 fragment_duration_ms=len(shaped),
@@ -4100,6 +4264,14 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
         samples, unreadable = discover_cue_samples(input_root, cue_path)
     else:
         samples, unreadable = discover_samples(input_root)
+
+    args.source_manifest_matches = 0
+    if args.source_manifest:
+        manifest_path = Path(args.source_manifest).expanduser().resolve()
+        manifest_entries = load_source_manifest(manifest_path, input_root)
+        args.source_manifest_matches = apply_source_manifest(samples, manifest_entries, input_root)
+        print(f"Source manifest applied: {manifest_path} (matched={args.source_manifest_matches}/{len(samples)})")
+
     if not samples:
         hint = f" ({unreadable} files could not be decoded)" if unreadable else ""
         if args.cue_file:

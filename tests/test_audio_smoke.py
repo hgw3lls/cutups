@@ -97,8 +97,14 @@ class AudioSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = root / "voice_phrase.wav"
+            manifest = root / "source_manifest.csv"
             output = root / "render"
             _write_tone_wav(source)
+            manifest.write_text(
+                "file,role,tags,intensity,loop_hint,words,weight\n"
+                "voice_phrase.wav,beat,\"drum,loop\",1,3,2,1.4\n",
+                encoding="utf-8",
+            )
 
             result = self.run_cutup(
                 [
@@ -108,6 +114,8 @@ class AudioSmokeTests(unittest.TestCase):
                     "beat-cutup",
                     "--input",
                     str(source),
+                    "--source-manifest",
+                    str(manifest),
                     "--bpm",
                     "120",
                     "--slice-grid",
@@ -140,6 +148,8 @@ class AudioSmokeTests(unittest.TestCase):
                 ]
             )
             self.assertIn("Audio events placed:", result.stdout)
+            self.assertIn("Source manifest applied:", result.stdout)
+            self.assertIn("matched=1/1", result.stdout)
             self.assertIn("Analysis cache written:", result.stdout)
             self.assertIn("reused=0", result.stdout)
             self.assertIn("refreshed=1", result.stdout)
@@ -164,6 +174,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertIn("selection_reason", rows[0])
             self.assertIn("source_final_weight", rows[0])
             self.assertIn("section_density_target", rows[0])
+            self.assertEqual(rows[0]["source_manifest_role"], "beat")
+            self.assertEqual(rows[0]["source_manifest_weight"], "1.4")
             transforms = " ".join(row["transformation"] for row in rows)
             for tag in ("+grid", "+beatstutter", "+beatmute", "+beatrepeat", "+beatdrop"):
                 self.assertIn(tag, transforms)
@@ -179,6 +191,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["config"]["section_arc"], "pulse")
             self.assertEqual(render_plan["config"]["source_score"], "beat")
             self.assertEqual(render_plan["config"]["source_diversity"], 0.35)
+            self.assertEqual(render_plan["config"]["source_manifest"], str(manifest))
+            self.assertEqual(render_plan["config"]["source_manifest_matches"], 1)
             self.assertEqual(render_plan["config"]["beat_novelty"], 0.4)
             self.assertEqual(render_plan["summary"]["event_count"], len(rows))
             self.assertEqual(len(render_plan["events"]), len(rows))
@@ -190,10 +204,12 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertIn("source_weight", render_plan["events"][0]["planner"])
             self.assertIn("section_targets", render_plan["events"][0]["planner"])
             self.assertEqual(render_plan["events"][0]["planner"]["source_weight"]["source_score_mode"], "beat")
+            self.assertEqual(render_plan["events"][0]["planner"]["source_weight"]["manifest_weight"], 1.4)
+            self.assertEqual(render_plan["events"][0]["source_manifest_role"], "beat")
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
-            self.assertEqual(cache["version"], 7)
+            self.assertEqual(cache["version"], 8)
             self.assertEqual(cache["grid_ms"], 125)
             self.assertEqual(cache["beat_jump_mode"], "similarity")
             self.assertEqual(cache["beat_similarity_weight"], 0.75)
@@ -217,6 +233,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(sample["basename"], source.name)
             self.assertEqual(sample["cache_state"], "fresh")
             self.assertEqual(sample["channels"], 2)
+            self.assertEqual(sample["manifest_role"], "beat")
+            self.assertEqual(sample["manifest_weight"], 1.4)
             self.assertGreater(sample["duration_ms"], 0)
             self.assertGreater(sample["zero_crossing_rate"], 0)
             self.assertLessEqual(sample["zero_crossing_rate"], 1)
