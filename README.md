@@ -143,6 +143,8 @@ Spoken-word cutups can bias toward intelligibility or rupture:
 python3 PY/cutup.py --mode audio --preset spoken-word-cutup --input ./voice.wav --phrase-length medium --intelligibility high --interruption-density low --silence-insert-ms 120:420 --output out/spoken_demo
 ```
 
+Use `--source-diversity 0.0..1.0` to penalize immediate and repeated source reuse. TRANSMISSIONS presets set conservative defaults, and higher values are useful when a larger dataset is collapsing onto one dominant file.
+
 Use subtitle or cue files to cut on phrase boundaries:
 
 ```bash

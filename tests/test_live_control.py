@@ -6,6 +6,7 @@ import tempfile
 import types
 import unittest
 import wave
+from collections import Counter
 from unittest import mock
 from pathlib import Path
 
@@ -112,6 +113,7 @@ class LiveControlTests(unittest.TestCase):
             density="medium",
             sectional=True,
             arrangement_style="sequential",
+            source_diversity=0.65,
             concrete=False,
             bed_noise=False,
             sample_rate=44100,
@@ -128,6 +130,7 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["event_count"], 1)
         self.assertEqual(plan["summary"]["cue_event_count"], 1)
         self.assertEqual(plan["config"]["beat_grid_ms"], 125)
+        self.assertEqual(plan["config"]["source_diversity"], 0.65)
         self.assertEqual(plan["events"][0]["transform_tags"], ["slice", "grid"])
         self.assertEqual(len(plan["section_windows"]), 5)
 
@@ -574,6 +577,28 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(len(called_pool), 6)
         self.assertEqual(picked, samples[-1])
         self.assertLess(choices.call_args.kwargs["weights"][0], choices.call_args.kwargs["weights"][-1])
+
+    def test_weighted_choice_penalizes_overused_recent_source_when_diverse(self) -> None:
+        samples = [
+            cutup.SampleFile(path=Path("a.wav"), duration_ms=1000, words=1, intensity_hint=0, loop_hint=0),
+            cutup.SampleFile(path=Path("b.wav"), duration_ms=1000, words=1, intensity_hint=0, loop_hint=0),
+            cutup.SampleFile(path=Path("c.wav"), duration_ms=1000, words=1, intensity_hint=0, loop_hint=0),
+        ]
+        args = types.SimpleNamespace(source_diversity=1.0)
+        source_counts = Counter({str(samples[0].path): 4})
+        with mock.patch.object(cutup.random, "choices", return_value=[samples[1]]) as choices:
+            picked = cutup.weighted_choice(
+                samples,
+                concrete=False,
+                args=args,
+                source_counts=source_counts,
+                recent_source_keys=[str(samples[0].path), str(samples[0].path)],
+                previous_sample=samples[0],
+            )
+        weights = choices.call_args.kwargs["weights"]
+        self.assertEqual(picked, samples[1])
+        self.assertLess(weights[0], weights[1])
+        self.assertEqual(weights[1], weights[2])
 
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:

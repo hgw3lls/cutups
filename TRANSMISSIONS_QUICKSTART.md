@@ -200,6 +200,10 @@ Beat controls only act when the grid is active:
 - `--mute-rate 0..1`: replaces individual grid cells with silence.
 - `--beat-dropout-rate 0..1`: cuts longer grid-aligned holes.
 
+## Source Diversity
+
+Use `--source-diversity 0.0..1.0` when a render overuses one file from a larger dataset. TRANSMISSIONS presets set conservative defaults; higher values push non-memory source choices toward less-used and less-recent files while still allowing intentional recurrence.
+
 ## Radio Intrusion
 
 ```bash

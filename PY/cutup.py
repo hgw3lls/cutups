@@ -202,6 +202,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "dropout_rate": 0.64,
             "reverse_shard_rate": 0.46,
             "filter_severity": "hard",
+            "source_diversity": 0.22,
         },
     },
     "spoken-word-cutup": {
@@ -226,6 +227,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "interruption_density": "low",
             "silence_insert_ms": "120:420",
             "max_words_slogan": 14,
+            "source_diversity": 0.65,
         },
     },
     "beat-cutup": {
@@ -248,6 +250,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "mute_rate": 0.18,
             "repeat_rate": 0.38,
             "beat_dropout_rate": 0.16,
+            "source_diversity": 0.35,
         },
     },
     "radio-intrusion": {
@@ -270,6 +273,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "burst_rate": 0.24,
             "dropout_rate": 0.28,
             "filter_severity": "hard",
+            "source_diversity": 0.45,
         },
     },
     "hard-stutter": {
@@ -293,6 +297,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "mute_rate": 0.26,
             "repeat_rate": 0.52,
             "beat_dropout_rate": 0.24,
+            "source_diversity": 0.25,
         },
     },
     "ghost-transmission": {
@@ -312,6 +317,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "min_frag": 0.25,
             "max_frag": 2.8,
             "master_gain": -5.5,
+            "source_diversity": 0.18,
         },
     },
 }
@@ -732,6 +738,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
+    p.add_argument("--source-diversity", type=float, default=0.0, help="Source balancing 0..1; higher values penalize immediate and repeated source reuse.")
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
     p.add_argument("--beat-jump-mode", choices=["random", "similarity"], default="random", help="Beat source jump planner. Similarity mode uses cache planning metadata when available and falls back to weighted random selection.")
@@ -935,6 +942,8 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--bpm must be 20..300, or 0 to disable beat-grid behavior")
     if args.bpm <= 0 and args.slice_grid != "off" and "slice_grid" in getattr(args, "_explicit_args", set()):
         raise SystemExit("--slice-grid requires --bpm")
+    if not 0.0 <= args.source_diversity <= 1.0:
+        raise SystemExit("--source-diversity must be 0..1")
     if not 0.0 <= args.beat_similarity_weight <= 1.0:
         raise SystemExit("--beat-similarity-weight must be 0..1")
     if not 0.0 <= args.beat_novelty <= 1.0:
@@ -1545,6 +1554,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"density: {args.density}")
     print(f"sectional: {args.sectional}")
     print(f"arrangement_style: {args.arrangement_style}")
+    print(f"source_diversity: {args.source_diversity:.2f}")
     print(f"concrete: {args.concrete}")
     print(f"bed_noise: {args.bed_noise}")
     print(f"fragments: {args.min_frag:.3f}s..{args.max_frag:.3f}s")
@@ -2813,28 +2823,92 @@ def choose_event_count(duration_s: float, density: str, sectional: bool) -> int:
     return max(8, int(base * (duration_s / 90.0)))
 
 
-def weighted_choice(samples: List[SampleFile], concrete: bool) -> SampleFile:
+def source_balance_key(sample: SampleFile) -> str:
+    return str(sample.path)
+
+
+def base_source_weight(sample: SampleFile, concrete: bool) -> float:
+    dur_s = sample.duration_ms / 1000.0
+    dur_bonus = 2.1 if 0.05 <= dur_s <= 1.7 else 1.2 if dur_s <= 3.5 else 0.45
+    if not concrete and dur_s > 3.2:
+        dur_bonus += 0.5
+    word_bonus = 1.3 if 2 <= sample.words <= 8 else 0.7
+    return max(0.1, dur_bonus + word_bonus + sample.intensity_hint + sample.loop_hint)
+
+
+def source_diversity_multiplier(
+    sample: SampleFile,
+    args: argparse.Namespace,
+    source_counts: Optional[Counter] = None,
+    recent_source_keys: Optional[Sequence[str]] = None,
+    previous_sample: Optional[SampleFile] = None,
+) -> float:
+    diversity = clamp(float(getattr(args, "source_diversity", 0.0) or 0.0), 0.0, 1.0)
+    if diversity <= 0:
+        return 1.0
+    key = source_balance_key(sample)
+    count = int(source_counts.get(key, 0)) if source_counts else 0
+    recent_hits = sum(1 for recent_key in (recent_source_keys or []) if recent_key == key)
+    use_penalty = 1.0 / (1.0 + count * (0.75 + diversity * 1.75))
+    recent_penalty = 1.0 / (1.0 + recent_hits * diversity * 2.5)
+    previous_penalty = 1.0
+    if previous_sample is not None and source_balance_key(previous_sample) == key:
+        previous_penalty = max(0.05, 1.0 - 0.85 * diversity)
+    return max(0.01, use_penalty * recent_penalty * previous_penalty)
+
+
+def weighted_choice(
+    samples: List[SampleFile],
+    concrete: bool,
+    args: Optional[argparse.Namespace] = None,
+    source_counts: Optional[Counter] = None,
+    recent_source_keys: Optional[Sequence[str]] = None,
+    previous_sample: Optional[SampleFile] = None,
+) -> SampleFile:
     weights = []
-    for s in samples:
-        dur_s = s.duration_ms / 1000.0
-        dur_bonus = 2.1 if 0.05 <= dur_s <= 1.7 else 1.2 if dur_s <= 3.5 else 0.45
-        if not concrete and dur_s > 3.2:
-            dur_bonus += 0.5
-        word_bonus = 1.3 if 2 <= s.words <= 8 else 0.7
-        weights.append(max(0.1, dur_bonus + word_bonus + s.intensity_hint + s.loop_hint))
+    for sample in samples:
+        weight = base_source_weight(sample, concrete)
+        if args is not None:
+            weight *= source_diversity_multiplier(
+                sample,
+                args,
+                source_counts=source_counts,
+                recent_source_keys=recent_source_keys,
+                previous_sample=previous_sample,
+            )
+        weights.append(max(0.01, weight))
     return random.choices(samples, weights=weights, k=1)[0]
 
 
-def choose_similarity_neighbor(candidates: List[SampleFile], args: argparse.Namespace) -> SampleFile:
+def choose_similarity_neighbor(
+    candidates: List[SampleFile],
+    args: argparse.Namespace,
+    source_counts: Optional[Counter] = None,
+    recent_source_keys: Optional[Sequence[str]] = None,
+    previous_sample: Optional[SampleFile] = None,
+) -> SampleFile:
     novelty = clamp(float(getattr(args, "beat_novelty", 0.0)), 0.0, 1.0)
     pool_size = max(1, min(len(candidates), 3 + int(round(novelty * max(0, len(candidates) - 3)))))
     pool = candidates[:pool_size]
     width = max(1, len(pool) - 1)
     weights = []
-    for idx, _ in enumerate(pool):
+    for idx, sample in enumerate(pool):
         near_weight = len(pool) - idx
         far_weight = 1.0 + (idx / width) * len(pool)
-        weights.append(max(0.01, (1.0 - novelty) * near_weight + novelty * far_weight))
+        novelty_weight = max(0.01, (1.0 - novelty) * near_weight + novelty * far_weight)
+        weights.append(
+            max(
+                0.01,
+                novelty_weight
+                * source_diversity_multiplier(
+                    sample,
+                    args,
+                    source_counts=source_counts,
+                    recent_source_keys=recent_source_keys,
+                    previous_sample=previous_sample,
+                ),
+            )
+        )
     return random.choices(pool, weights=weights, k=1)[0]
 
 
@@ -2844,22 +2918,44 @@ def choose_source_sample(
     concrete: bool,
     beat_jump: Optional[BeatJumpState] = None,
     previous_sample: Optional[SampleFile] = None,
+    source_counts: Optional[Counter] = None,
+    recent_source_keys: Optional[Sequence[str]] = None,
 ) -> SampleFile:
     if beat_jump and beat_jump.active and previous_sample is not None:
         similarity_weight = clamp(float(getattr(args, "beat_similarity_weight", 1.0)), 0.0, 1.0)
         if random.random() > similarity_weight:
             beat_jump.fallbacks += 1
-            return weighted_choice(samples, concrete)
+            return weighted_choice(
+                samples,
+                concrete,
+                args=args,
+                source_counts=source_counts,
+                recent_source_keys=recent_source_keys,
+                previous_sample=previous_sample,
+            )
         source_key = analysis_cache_key_for_sample(previous_sample, args)
         neighbor_keys = beat_jump.neighbor_keys.get(source_key, [])
         candidates = [beat_jump.samples_by_key[key] for key in neighbor_keys if key in beat_jump.samples_by_key]
         if candidates:
             beat_jump.selections += 1
-            return choose_similarity_neighbor(candidates, args)
+            return choose_similarity_neighbor(
+                candidates,
+                args,
+                source_counts=source_counts,
+                recent_source_keys=recent_source_keys,
+                previous_sample=previous_sample,
+            )
         beat_jump.fallbacks += 1
     elif beat_jump and beat_jump.active:
         beat_jump.fallbacks += 1
-    return weighted_choice(samples, concrete)
+    return weighted_choice(
+        samples,
+        concrete,
+        args=args,
+        source_counts=source_counts,
+        recent_source_keys=recent_source_keys,
+        previous_sample=previous_sample,
+    )
 
 
 def section_profile(progress: float, args: argparse.Namespace) -> Dict[str, float]:
@@ -3316,6 +3412,7 @@ def build_audio_plan(
             "density": str(args.density),
             "sectional": bool(args.sectional),
             "arrangement_style": str(args.arrangement_style),
+            "source_diversity": float(args.source_diversity),
             "concrete": bool(args.concrete),
             "bed_noise": bool(args.bed_noise),
             "sample_rate": int(args.sample_rate),
@@ -3403,6 +3500,8 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
     memory: Deque[SampleFile] = deque(maxlen=max(1, args.memory_depth))
     recurrence_memory: Deque[Tuple[SampleFile, AudioSegment, Dict[str, object], str]] = deque(maxlen=max(3, args.memory_depth * 2))
     recurrence_count: Dict[str, int] = {}
+    source_counts: Counter = Counter()
+    recent_source_keys: Deque[str] = deque(maxlen=max(3, min(12, args.memory_depth)))
     previous_source_sample: Optional[SampleFile] = None
     plan = section_plan(total_ms)
     grid_ms = beat_grid_ms(args)
@@ -3452,7 +3551,19 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             meta = dict(meta)
             meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
         else:
-            sample = random.choice(list(memory)) if (memory and random.random() < clamp(memory_bias, 0.0, 0.95)) else choose_source_sample(samples, local_args, local_args.concrete, beat_jump=beat_jump, previous_sample=previous_source_sample)
+            sample = (
+                random.choice(list(memory))
+                if (memory and random.random() < clamp(memory_bias, 0.0, 0.95))
+                else choose_source_sample(
+                    samples,
+                    local_args,
+                    local_args.concrete,
+                    beat_jump=beat_jump,
+                    previous_sample=previous_source_sample,
+                    source_counts=source_counts,
+                    recent_source_keys=list(recent_source_keys),
+                )
+            )
             src = source_audio_for_sample(sample, local_args)
             if sample.has_cue() and str(getattr(local_args, "cue_slice_mode", "full")) == "full":
                 frag = src
@@ -3558,6 +3669,9 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         memory.append(sample)
         recurrence_memory.append((sample, shaped, meta, sec_name))
         previous_source_sample = sample
+        source_key = source_balance_key(sample)
+        source_counts[source_key] += 1
+        recent_source_keys.append(source_key)
         rec_idx = recurrence_count[str(sample.path)]
         events.append(
             Event(
