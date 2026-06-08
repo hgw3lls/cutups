@@ -133,7 +133,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
-ANALYSIS_CACHE_VERSION = 6
+ANALYSIS_CACHE_VERSION = 7
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
 ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
@@ -579,6 +579,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--slice-grid", choices=sorted(SLICE_GRID_FACTORS), default="off", help="Beat grid unit for source slicing and event starts when --bpm is set.")
     p.add_argument("--beat-jump-mode", choices=["random", "similarity"], default="random", help="Beat source jump planner. Similarity mode uses cache planning metadata when available and falls back to weighted random selection.")
     p.add_argument("--beat-similarity-weight", type=float, default=1.0, help="Probability 0..1 of following a similarity neighbor when --beat-jump-mode similarity has an active plan.")
+    p.add_argument("--beat-novelty", type=float, default=0.0, help="Probability bias 0..1 toward farther, more disruptive similarity neighbors.")
     p.add_argument("--stutter-rate", type=float, default=0.0, help="Beat-grid probability for retriggered stutter cells; requires active --bpm/--slice-grid.")
     p.add_argument("--mute-rate", type=float, default=0.0, help="Beat-grid probability for replacing cells with silence; requires active --bpm/--slice-grid.")
     p.add_argument("--repeat-rate", type=float, default=0.0, help="Beat-grid probability for repeating cells; requires active --bpm/--slice-grid.")
@@ -752,6 +753,8 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--slice-grid requires --bpm")
     if not 0.0 <= args.beat_similarity_weight <= 1.0:
         raise SystemExit("--beat-similarity-weight must be 0..1")
+    if not 0.0 <= args.beat_novelty <= 1.0:
+        raise SystemExit("--beat-novelty must be 0..1")
     if args.memory_depth < 1:
         raise SystemExit("--memory-depth must be >= 1")
     if args.cut_match_count < 1:
@@ -1211,6 +1214,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
         print(f"beat_grid: inactive (bpm={args.bpm:g}, slice_grid={args.slice_grid})")
     print(f"beat_jump_mode: {args.beat_jump_mode}")
     print(f"beat_similarity_weight: {args.beat_similarity_weight:.2f}")
+    print(f"beat_novelty: {args.beat_novelty:.2f}")
     if args.beat_jump_mode == "similarity" and not analysis_cache:
         print("beat_jump_plan: enable --analysis-cache to write similarity planning metadata")
     beat_rates = beat_control_rates(args)
@@ -2283,7 +2287,7 @@ def similarity_distance(left: Dict[str, object], right: Dict[str, object]) -> Op
     return round(distance, 6)
 
 
-def build_beat_jump_plan(entries: List[Dict[str, object]], args: argparse.Namespace, top_k: int = 3) -> Dict[str, object]:
+def build_beat_jump_plan(entries: List[Dict[str, object]], args: argparse.Namespace, top_k: int = 8) -> Dict[str, object]:
     mode = str(getattr(args, "beat_jump_mode", "random") or "random")
     if mode != "similarity":
         return {"mode": mode, "metric": "none", "fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS), "sources": []}
@@ -2441,6 +2445,7 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
         "slice_grid": args.slice_grid,
         "beat_jump_mode": str(getattr(args, "beat_jump_mode", "random") or "random"),
         "beat_similarity_weight": float(getattr(args, "beat_similarity_weight", 1.0)),
+        "beat_novelty": float(getattr(args, "beat_novelty", 0.0)),
         "grid_ms": beat_grid_ms(args),
         "similarity_vector_fields": list(ANALYSIS_SIMILARITY_VECTOR_FIELDS),
         "beat_jump_plan": build_beat_jump_plan(entries, args),
@@ -2471,6 +2476,19 @@ def weighted_choice(samples: List[SampleFile], concrete: bool) -> SampleFile:
     return random.choices(samples, weights=weights, k=1)[0]
 
 
+def choose_similarity_neighbor(candidates: List[SampleFile], args: argparse.Namespace) -> SampleFile:
+    novelty = clamp(float(getattr(args, "beat_novelty", 0.0)), 0.0, 1.0)
+    pool_size = max(1, min(len(candidates), 3 + int(round(novelty * max(0, len(candidates) - 3)))))
+    pool = candidates[:pool_size]
+    width = max(1, len(pool) - 1)
+    weights = []
+    for idx, _ in enumerate(pool):
+        near_weight = len(pool) - idx
+        far_weight = 1.0 + (idx / width) * len(pool)
+        weights.append(max(0.01, (1.0 - novelty) * near_weight + novelty * far_weight))
+    return random.choices(pool, weights=weights, k=1)[0]
+
+
 def choose_source_sample(
     samples: List[SampleFile],
     args: argparse.Namespace,
@@ -2487,10 +2505,8 @@ def choose_source_sample(
         neighbor_keys = beat_jump.neighbor_keys.get(source_key, [])
         candidates = [beat_jump.samples_by_key[key] for key in neighbor_keys if key in beat_jump.samples_by_key]
         if candidates:
-            pool = candidates[:3]
-            weights = [len(pool) - idx for idx, _ in enumerate(pool)]
             beat_jump.selections += 1
-            return random.choices(pool, weights=weights, k=1)[0]
+            return choose_similarity_neighbor(candidates, args)
         beat_jump.fallbacks += 1
     elif beat_jump and beat_jump.active:
         beat_jump.fallbacks += 1

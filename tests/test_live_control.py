@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -448,6 +449,19 @@ class LiveControlTests(unittest.TestCase):
             self.assertIn(picked, samples)
             self.assertEqual(state.selections, 0)
             self.assertEqual(state.fallbacks, 1)
+
+    def test_choose_similarity_neighbor_expands_pool_with_novelty(self) -> None:
+        samples = [
+            cutup.SampleFile(path=Path(f"{idx}.wav"), duration_ms=1000, words=1, intensity_hint=0, loop_hint=0)
+            for idx in range(6)
+        ]
+        args = types.SimpleNamespace(beat_novelty=1.0)
+        with mock.patch.object(cutup.random, "choices", return_value=[samples[-1]]) as choices:
+            picked = cutup.choose_similarity_neighbor(samples, args)
+        called_pool = choices.call_args.args[0]
+        self.assertEqual(len(called_pool), 6)
+        self.assertEqual(picked, samples[-1])
+        self.assertLess(choices.call_args.kwargs["weights"][0], choices.call_args.kwargs["weights"][-1])
 
     def test_cached_entry_without_required_descriptor_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -48,9 +48,7 @@ Use these projects as references, not embedded dependencies.
 2. Expand native lightweight beat descriptors:
    - spectral centroid if `librosa` is installed
    - onset/novelty hints
-3. Refine beat jump source selection:
-   - `--beat-novelty`
-4. Add corpus/target matching for spoken-word and signal-breach workflows after beat similarity is stable.
+3. Add corpus/target matching for spoken-word and signal-breach workflows after beat similarity is stable.
 
 ## Non-goals
 
