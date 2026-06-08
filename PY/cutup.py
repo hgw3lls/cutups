@@ -25,12 +25,14 @@ import platform
 import random
 import re
 import shutil
+import struct
 import sys
 import time
+import wave
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 AudioSegment: Any = None
 WhiteNoise: Any = None
@@ -145,6 +147,24 @@ ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
     "grid_zcr_mean",
     "grid_zcr_variation",
 )
+QA_SOURCE_SPECS: Dict[str, Tuple[Tuple[str, float, str], ...]] = {
+    "loops": (
+        ("drum_pulse_120.wav", 8.0, "loop_drums"),
+        ("bass_gate_120.wav", 8.0, "loop_bass"),
+        ("metal_tick_120.wav", 8.0, "loop_metal"),
+        ("noise_hat_120.wav", 8.0, "loop_noise_hat"),
+    ),
+    "voice": (
+        ("voice_phrase_a.wav", 6.0, "voice_a"),
+        ("voice_phrase_b.wav", 6.0, "voice_b"),
+        ("voice_gap_phrase.wav", 6.0, "voice_gap"),
+    ),
+    "signal": (
+        ("radio_noise_bursts.wav", 6.0, "signal_bursts"),
+        ("dropout_carrier.wav", 6.0, "signal_dropouts"),
+        ("scanline_hash.wav", 6.0, "signal_scanline"),
+    ),
+}
 
 PRESET_VALUES: Dict[str, Dict[str, object]] = {
     "signal-breach": {
@@ -548,6 +568,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--preset", choices=sorted(PRESET_VALUES), default="", help="Named TRANSMISSIONS recipe.")
     p.add_argument("--list-presets", action="store_true", help="Print available TRANSMISSIONS presets and exit.")
     p.add_argument("--doctor", action="store_true", help="Check local Python/audio dependencies and bundled data, then exit.")
+    p.add_argument("--init-qa-sources", default="", help="Write synthetic local QA WAV sources under this folder, then exit.")
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
@@ -614,6 +635,14 @@ def parse_args() -> argparse.Namespace:
         raise SystemExit(0)
     if parsed.doctor:
         print_doctor()
+        raise SystemExit(0)
+    if parsed.init_qa_sources:
+        written = write_qa_sources(Path(parsed.init_qa_sources), overwrite=parsed.overwrite)
+        root = Path(parsed.init_qa_sources).expanduser().resolve()
+        print(f"QA sources written under: {root}")
+        for group in sorted(QA_SOURCE_SPECS):
+            count = len([path for path in written if path.parent.name == group])
+            print(f"  {group}: {count} wav")
         raise SystemExit(0)
     return parsed
 
@@ -782,6 +811,124 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     args.text_chaos = clamp(args.text_chaos, 0.0, 1.5)
     args.absurd_seriousness = clamp(args.absurd_seriousness, 0.0, 1.0)
     return args
+
+
+# -------------------------------------------------------------------
+# QA SOURCE GENERATION
+# -------------------------------------------------------------------
+
+
+def pulse_decay(t: float, rate_hz: float, decay: float = 18.0) -> float:
+    position = (t * rate_hz) % 1.0
+    return math.exp(-position * decay)
+
+
+def pulse_gate(t: float, rate_hz: float, width: float = 0.5) -> float:
+    return 1.0 if (t * rate_hz) % 1.0 < width else 0.0
+
+
+def qa_voice_value(t: float, rng: random.Random, base_shift: float = 0.0, gaps: bool = False) -> float:
+    syllable_len = 0.28
+    syllable = int(t / syllable_len)
+    syllable_pos = (t / syllable_len) % 1.0
+    phrase_gate = pulse_gate(t, 0.55, 0.72)
+    if gaps and int(t * 0.8) % 3 == 1:
+        phrase_gate = 0.0
+    freqs = (142.0, 176.0, 164.0, 213.0, 188.0, 151.0, 231.0)
+    freq = freqs[syllable % len(freqs)] + base_shift
+    envelope = math.sin(math.pi * syllable_pos) ** 0.45
+    shimmer = 1.0 + 0.015 * math.sin(2.0 * math.pi * 5.2 * t)
+    voice = (
+        0.42 * math.sin(2.0 * math.pi * freq * shimmer * t)
+        + 0.20 * math.sin(2.0 * math.pi * freq * 2.3 * t)
+        + 0.11 * math.sin(2.0 * math.pi * freq * 3.7 * t)
+    )
+    breath = 0.035 * rng.uniform(-1.0, 1.0)
+    return (voice + breath) * envelope * phrase_gate
+
+
+def qa_source_value(profile: str, t: float, idx: int, rng: random.Random) -> float:
+    noise = rng.uniform(-1.0, 1.0)
+    if profile == "loop_drums":
+        beat_pos = (t * 2.0) % 1.0
+        beat_idx = int(t * 2.0) % 4
+        kick_env = pulse_decay(t, 2.0, 15.0)
+        kick = 0.72 * math.sin(2.0 * math.pi * (54.0 + 34.0 * kick_env) * t) * kick_env
+        snare_env = math.exp(-beat_pos * 19.0) if beat_idx in {1, 3} else 0.0
+        snare = 0.28 * noise * snare_env
+        hat = 0.10 * noise * pulse_decay(t, 8.0, 22.0)
+        return kick + snare + hat
+    if profile == "loop_bass":
+        freqs = (55.0, 55.0, 73.42, 82.41, 55.0, 110.0, 98.0, 73.42)
+        freq = freqs[int(t * 2.0) % len(freqs)]
+        gate = pulse_gate(t, 4.0, 0.62)
+        return 0.48 * math.sin(2.0 * math.pi * freq * t) * gate * (0.65 + 0.35 * pulse_decay(t, 4.0, 5.5))
+    if profile == "loop_metal":
+        env = pulse_decay(t, 8.0, 24.0)
+        return env * (0.32 * math.sin(2.0 * math.pi * 1175.0 * t) + 0.22 * math.sin(2.0 * math.pi * 1820.0 * t))
+    if profile == "loop_noise_hat":
+        return 0.22 * noise * pulse_decay(t, 8.0, 28.0) + 0.05 * noise * pulse_gate(t, 16.0, 0.18)
+    if profile == "voice_a":
+        return qa_voice_value(t, rng, base_shift=0.0)
+    if profile == "voice_b":
+        return qa_voice_value(t, rng, base_shift=42.0)
+    if profile == "voice_gap":
+        return qa_voice_value(t, rng, base_shift=-18.0, gaps=True)
+    if profile == "signal_bursts":
+        carrier = 0.16 * math.sin(2.0 * math.pi * 920.0 * t)
+        bursts = 0.62 * noise * pulse_gate(t, 1.35, 0.12) * pulse_decay(t, 1.35, 4.0)
+        return carrier + bursts
+    if profile == "signal_dropouts":
+        dropout = 0.0 if pulse_gate(t, 2.8, 0.18) else 1.0
+        carrier = 0.32 * math.sin(2.0 * math.pi * 720.0 * t) + 0.08 * math.sin(2.0 * math.pi * 1440.0 * t)
+        return dropout * (carrier + 0.045 * noise)
+    if profile == "signal_scanline":
+        hash_gate = pulse_gate(t, 31.0, 0.16)
+        sweep = math.sin(2.0 * math.pi * (380.0 + 260.0 * math.sin(2.0 * math.pi * 0.24 * t)) * t)
+        return 0.18 * sweep + 0.34 * noise * hash_gate
+    return 0.0
+
+
+def write_pcm16_wav(path: Path, duration_s: float, sample_value: Callable[[float, int, random.Random], float], sample_rate: int = 44100) -> None:
+    rng = random.Random(path.name)
+    frame_count = int(duration_s * sample_rate)
+    frames = bytearray()
+    for idx in range(frame_count):
+        t = idx / float(sample_rate)
+        value = clamp(sample_value(t, idx, rng), -0.98, 0.98)
+        frames.extend(struct.pack("<h", int(value * 32767)))
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(frames)
+
+
+def write_qa_sources(root: Path, overwrite: bool = False) -> List[Path]:
+    root = root.expanduser().resolve()
+    if root.exists() and not root.is_dir():
+        raise SystemExit(f"--init-qa-sources path exists and is not a directory: {root}")
+
+    existing: List[Path] = []
+    targets: List[Tuple[Path, float, str]] = []
+    for group, specs in QA_SOURCE_SPECS.items():
+        group_dir = root / group
+        for filename, duration_s, profile in specs:
+            path = group_dir / filename
+            targets.append((path, duration_s, profile))
+            if path.exists() and not overwrite:
+                existing.append(path)
+    if existing:
+        shown = ", ".join(str(path) for path in existing[:3])
+        suffix = "..." if len(existing) > 3 else ""
+        raise SystemExit(f"QA source file already exists: {shown}{suffix}. Pass --overwrite to replace generated QA sources.")
+
+    written: List[Path] = []
+    for path, duration_s, profile in targets:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_pcm16_wav(path, duration_s, lambda t, idx, rng, profile=profile: qa_source_value(profile, t, idx, rng))
+        written.append(path)
+    return written
 
 
 # -------------------------------------------------------------------

@@ -2,13 +2,13 @@
 
 Use these recipes to audition TRANSMISSIONS workflows after CLI or audio-engine changes. They are meant for human listening, not automated tests.
 
-Keep source audio outside the repo, and write renders to `out/`, which is ignored by git:
+Keep source audio outside the repo, and write renders to `out/`, which is ignored by git. To create starter WAV sources for every recipe:
 
 ```bash
-mkdir -p ../cutups_qa_sources/loops ../cutups_qa_sources/voice ../cutups_qa_sources/signal
+python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources
 ```
 
-Put short loop files in `../cutups_qa_sources/loops`, spoken recordings in `../cutups_qa_sources/voice`, and noisy/radio/mixed sources in `../cutups_qa_sources/signal`.
+The generated files are synthetic placeholders. Replace or supplement them with short loop files in `../cutups_qa_sources/loops`, spoken recordings in `../cutups_qa_sources/voice`, and noisy/radio/mixed sources in `../cutups_qa_sources/signal` for real production checks.
 
 ## Preflight
 
@@ -16,6 +16,7 @@ Put short loop files in `../cutups_qa_sources/loops`, spoken recordings in `../c
 python3 PY/cutup.py --doctor
 python3 PY/cutup.py --list-presets
 python3 PY/cutup.py --help
+python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources --overwrite
 ```
 
 Expected:
@@ -23,6 +24,7 @@ Expected:
 - `--doctor` reports `status: ready`.
 - `--list-presets` includes `signal-breach`, `spoken-word-cutup`, `beat-cutup`, `radio-intrusion`, `hard-stutter`, and `ghost-transmission`.
 - `--help` includes beat controls such as `--beat-jump-mode`, `--beat-similarity-weight`, and `--beat-novelty`.
+- `--init-qa-sources` writes `loops`, `voice`, and `signal` WAV folders.
 
 ## Beat Similarity And Novelty
 

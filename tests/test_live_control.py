@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+import wave
 from unittest import mock
 from pathlib import Path
 
@@ -47,6 +48,26 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual([name for name, _, _ in checks], ["librosa", "scikit-learn"])
         self.assertTrue(all(isinstance(ok, bool) for _, ok, _ in checks))
         self.assertTrue(all(detail for _, _, detail in checks))
+
+    def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "qa_sources"
+            written = cutup.write_qa_sources(root, overwrite=False)
+            expected_count = sum(len(specs) for specs in cutup.QA_SOURCE_SPECS.values())
+            self.assertEqual(len(written), expected_count)
+            self.assertEqual({path.parent.name for path in written}, {"loops", "voice", "signal"})
+            self.assertTrue((root / "loops" / "drum_pulse_120.wav").exists())
+
+            with wave.open(str(written[0]), "rb") as wav:
+                self.assertEqual(wav.getnchannels(), 1)
+                self.assertEqual(wav.getsampwidth(), 2)
+                self.assertEqual(wav.getframerate(), 44100)
+                self.assertGreater(wav.getnframes(), 0)
+
+            with self.assertRaises(SystemExit):
+                cutup.write_qa_sources(root, overwrite=False)
+            rewritten = cutup.write_qa_sources(root, overwrite=True)
+            self.assertEqual(len(rewritten), expected_count)
 
     def test_runtime_snapshot_uses_defaults_when_disabled(self) -> None:
         args = types.SimpleNamespace(

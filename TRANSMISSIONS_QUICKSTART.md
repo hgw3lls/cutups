@@ -10,6 +10,12 @@ python3 PY/cutup.py --doctor
 
 If `ffmpeg` is missing, install it with your system package manager before using audio modes. `--doctor` reports Python, `pydub`, `ffmpeg`/`avconv`, bundled CSVs, and preset availability.
 
+Create starter local WAV sources for the listening recipes:
+
+```bash
+python3 PY/cutup.py --init-qa-sources ../cutups_qa_sources
+```
+
 ## Presets
 
 List the current TRANSMISSIONS presets:
