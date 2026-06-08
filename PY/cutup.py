@@ -173,7 +173,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
 ANALYSIS_CACHE_VERSION = 7
-AUDIO_PLAN_VERSION = 1
+AUDIO_PLAN_VERSION = 2
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
 ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
@@ -580,6 +580,35 @@ class Event:
     transformation: str
     layer_role: str
     recurrence_index: int
+    selection_reason: str = "unknown"
+    source_score_mode: str = "off"
+    source_base_weight: float = 0.0
+    source_material_score: float = 1.0
+    source_diversity_multiplier: float = 1.0
+    source_final_weight: float = 0.0
+    source_use_count_before: int = 0
+    source_recent_hits_before: int = 0
+    source_immediate_repeat: bool = False
+    section_density_target: float = 0.0
+    section_fragment_multiplier: float = 0.0
+    section_repeat_probability: float = 0.0
+    section_ghost_probability: float = 0.0
+
+
+EVENT_CSV_FIELDS = [
+    "layer", "section", "source", "source_basename", "source_duration_ms",
+    "source_cue_start_ms", "source_cue_end_ms", "source_cue_text",
+    "start_ms", "end_ms", "fragment_duration_ms", "gain_db",
+    "reversed", "speed", "repeated", "hp_hz", "lp_hz",
+    "grain_mode", "from_memory", "transformation", "layer_role",
+    "recurrence_index", "selection_reason", "source_score_mode",
+    "source_base_weight", "source_material_score",
+    "source_diversity_multiplier", "source_final_weight",
+    "source_use_count_before", "source_recent_hits_before",
+    "source_immediate_repeat", "section_density_target",
+    "section_fragment_multiplier", "section_repeat_probability",
+    "section_ghost_probability",
+]
 
 
 @dataclass
@@ -2965,6 +2994,74 @@ def source_diversity_multiplier(
     return max(0.01, use_penalty * recent_penalty * previous_penalty)
 
 
+def source_weight_components(
+    sample: SampleFile,
+    concrete: bool,
+    args: Optional[argparse.Namespace] = None,
+    source_counts: Optional[Counter] = None,
+    recent_source_keys: Optional[Sequence[str]] = None,
+    previous_sample: Optional[SampleFile] = None,
+    profile: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    base = base_source_weight(sample, concrete)
+    material = source_material_score(sample, args, profile=profile) if args is not None else 1.0
+    diversity = (
+        source_diversity_multiplier(
+            sample,
+            args,
+            source_counts=source_counts,
+            recent_source_keys=recent_source_keys,
+            previous_sample=previous_sample,
+        )
+        if args is not None
+        else 1.0
+    )
+    return {
+        "base_weight": round(base, 6),
+        "material_score": round(material, 6),
+        "diversity_multiplier": round(diversity, 6),
+        "final_weight": round(max(0.01, base * material * diversity), 6),
+    }
+
+
+def source_selection_diagnostics(
+    sample: SampleFile,
+    args: argparse.Namespace,
+    concrete: bool,
+    source_counts: Optional[Counter] = None,
+    recent_source_keys: Optional[Sequence[str]] = None,
+    previous_sample: Optional[SampleFile] = None,
+    profile: Optional[Dict[str, float]] = None,
+    reason: str = "weighted_source",
+) -> Dict[str, object]:
+    key = source_balance_key(sample)
+    recent = list(recent_source_keys or [])
+    components = source_weight_components(
+        sample,
+        concrete,
+        args=args,
+        source_counts=source_counts,
+        recent_source_keys=recent,
+        previous_sample=previous_sample,
+        profile=profile,
+    )
+    return {
+        "selection_reason": reason,
+        "source_score_mode": source_score_mode(args),
+        "source_base_weight": components["base_weight"],
+        "source_material_score": components["material_score"],
+        "source_diversity_multiplier": components["diversity_multiplier"],
+        "source_final_weight": components["final_weight"],
+        "source_use_count_before": int(source_counts.get(key, 0)) if source_counts else 0,
+        "source_recent_hits_before": sum(1 for recent_key in recent if recent_key == key),
+        "source_immediate_repeat": bool(previous_sample is not None and source_balance_key(previous_sample) == key),
+        "section_density_target": round(float((profile or {}).get("dens", 0.0)), 6),
+        "section_fragment_multiplier": round(float((profile or {}).get("frag_mul", 0.0)), 6),
+        "section_repeat_probability": round(float((profile or {}).get("repeat", 0.0)), 6),
+        "section_ghost_probability": round(float((profile or {}).get("ghost", 0.0)), 6),
+    }
+
+
 def weighted_choice(
     samples: List[SampleFile],
     concrete: bool,
@@ -2976,17 +3073,17 @@ def weighted_choice(
 ) -> SampleFile:
     weights = []
     for sample in samples:
-        weight = base_source_weight(sample, concrete)
-        if args is not None:
-            weight *= source_material_score(sample, args, profile=profile)
-            weight *= source_diversity_multiplier(
+        weights.append(
+            source_weight_components(
                 sample,
-                args,
+                concrete,
+                args=args,
                 source_counts=source_counts,
                 recent_source_keys=recent_source_keys,
                 previous_sample=previous_sample,
-            )
-        weights.append(max(0.01, weight))
+                profile=profile,
+            )["final_weight"]
+        )
     return random.choices(samples, weights=weights, k=1)[0]
 
 
@@ -3007,18 +3104,19 @@ def choose_similarity_neighbor(
         near_weight = len(pool) - idx
         far_weight = 1.0 + (idx / width) * len(pool)
         novelty_weight = max(0.01, (1.0 - novelty) * near_weight + novelty * far_weight)
+        components = source_weight_components(
+            sample,
+            concrete=bool(getattr(args, "concrete", False)),
+            args=args,
+            source_counts=source_counts,
+            recent_source_keys=recent_source_keys,
+            previous_sample=previous_sample,
+            profile=profile,
+        )
         weights.append(
             max(
                 0.01,
-                novelty_weight
-                * source_material_score(sample, args, profile=profile)
-                * source_diversity_multiplier(
-                    sample,
-                    args,
-                    source_counts=source_counts,
-                    recent_source_keys=recent_source_keys,
-                    previous_sample=previous_sample,
-                ),
+                novelty_weight * float(components["material_score"]) * float(components["diversity_multiplier"]),
             )
         )
     return random.choices(pool, weights=weights, k=1)[0]
@@ -3460,7 +3558,7 @@ def shape_fragment(audio: AudioSegment, profile: Dict[str, float], args: argpars
 
 def export_manifest(path: Path, events: List[Event]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["layer", "section", "source", "source_basename", "source_duration_ms", "source_cue_start_ms", "source_cue_end_ms", "source_cue_text", "start_ms", "end_ms", "fragment_duration_ms", "gain_db", "reversed", "speed", "repeated", "hp_hz", "lp_hz", "grain_mode", "from_memory", "transformation", "layer_role", "recurrence_index"])
+        writer = csv.DictWriter(f, fieldnames=EVENT_CSV_FIELDS)
         writer.writeheader()
         for e in events:
             writer.writerow(e.__dict__)
@@ -3520,12 +3618,32 @@ def section_target_rows(args: argparse.Namespace, total_ms: int) -> List[Dict[st
 
 def event_plan_row(event: Event, index: int) -> Dict[str, object]:
     row = dict(event.__dict__)
+    planner = {
+        "selection_reason": row.pop("selection_reason", ""),
+        "source_weight": {
+            "source_score_mode": row.pop("source_score_mode", "off"),
+            "base_weight": row.pop("source_base_weight", 0.0),
+            "material_score": row.pop("source_material_score", 1.0),
+            "diversity_multiplier": row.pop("source_diversity_multiplier", 1.0),
+            "final_weight": row.pop("source_final_weight", 0.0),
+            "use_count_before": row.pop("source_use_count_before", 0),
+            "recent_hits_before": row.pop("source_recent_hits_before", 0),
+            "immediate_repeat": row.pop("source_immediate_repeat", False),
+        },
+        "section_targets": {
+            "density": row.pop("section_density_target", 0.0),
+            "fragment_multiplier": row.pop("section_fragment_multiplier", 0.0),
+            "repeat_probability": row.pop("section_repeat_probability", 0.0),
+            "ghost_probability": row.pop("section_ghost_probability", 0.0),
+        },
+    }
     row["event_index"] = index
     row["start_sec"] = round(event.start_ms / 1000.0, 3)
     row["end_sec"] = round(event.end_ms / 1000.0, 3)
     row["fragment_duration_sec"] = round(event.fragment_duration_ms / 1000.0, 3)
     row["transform_tags"] = [tag for tag in event.transformation.split("+") if tag]
     row["has_cue"] = bool(event.source_cue_end_ms > event.source_cue_start_ms)
+    row["planner"] = planner
     return row
 
 
@@ -3712,9 +3830,11 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         memory_bias = local_args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
         use_recurrence_fragment = bool(recurrence_memory and random.random() < clamp(memory_bias * (1.4 if sec_name in {"PRESSURE", "COLLAPSE"} else 1.0), 0.0, 0.97))
         from_memory = False
+        selection_reason = "weighted_source"
         if use_recurrence_fragment:
             sample, shaped, meta, _ = random.choice(list(recurrence_memory))
             from_memory = True
+            selection_reason = "recurrence_fragment"
             if random.random() < 0.34:
                 shaped = change_speed(shaped, random.choice([0.84, 0.92, 1.05, 1.16]))
             if random.random() < 0.38:
@@ -3724,10 +3844,13 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
             meta = dict(meta)
             meta["transformation"] = f"{meta.get('transformation', 'slice')}+memory"
         else:
-            sample = (
-                random.choice(list(memory))
-                if (memory and random.random() < clamp(memory_bias, 0.0, 0.95))
-                else choose_source_sample(
+            if memory and random.random() < clamp(memory_bias, 0.0, 0.95):
+                sample = random.choice(list(memory))
+                selection_reason = "source_memory"
+            else:
+                before_jumps = beat_jump.selections if beat_jump else 0
+                before_fallbacks = beat_jump.fallbacks if beat_jump else 0
+                sample = choose_source_sample(
                     samples,
                     local_args,
                     local_args.concrete,
@@ -3737,7 +3860,10 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                     recent_source_keys=list(recent_source_keys),
                     profile=profile,
                 )
-            )
+                if beat_jump and beat_jump.selections > before_jumps:
+                    selection_reason = "similarity_neighbor"
+                elif beat_jump and beat_jump.fallbacks > before_fallbacks:
+                    selection_reason = "weighted_source_fallback"
             src = source_audio_for_sample(sample, local_args)
             if sample.has_cue() and str(getattr(local_args, "cue_slice_mode", "full")) == "full":
                 frag = src
@@ -3842,8 +3968,18 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
 
         memory.append(sample)
         recurrence_memory.append((sample, shaped, meta, sec_name))
-        previous_source_sample = sample
         source_key = source_balance_key(sample)
+        selection_debug = source_selection_diagnostics(
+            sample,
+            local_args,
+            local_args.concrete,
+            source_counts=source_counts,
+            recent_source_keys=list(recent_source_keys),
+            previous_sample=previous_source_sample,
+            profile=profile,
+            reason=selection_reason,
+        )
+        previous_source_sample = sample
         source_counts[source_key] += 1
         recent_source_keys.append(source_key)
         rec_idx = recurrence_count[str(sample.path)]
@@ -3871,6 +4007,7 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 transformation=str(meta["transformation"]),
                 layer_role="foreground" if layer == "voice_main" else "rhythmic" if layer == "voice_cuts" else "ghost",
                 recurrence_index=rec_idx,
+                **selection_debug,
             )
         )
 

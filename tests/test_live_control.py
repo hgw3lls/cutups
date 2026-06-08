@@ -105,6 +105,19 @@ class LiveControlTests(unittest.TestCase):
             transformation="slice+grid",
             layer_role="foreground",
             recurrence_index=1,
+            selection_reason="weighted_source",
+            source_score_mode="spoken",
+            source_base_weight=3.4,
+            source_material_score=1.2,
+            source_diversity_multiplier=0.8,
+            source_final_weight=3.264,
+            source_use_count_before=2,
+            source_recent_hits_before=1,
+            source_immediate_repeat=True,
+            section_density_target=0.95,
+            section_fragment_multiplier=1.2,
+            section_repeat_probability=0.23,
+            section_ghost_probability=0.18,
         )
         args = types.SimpleNamespace(
             seed=9,
@@ -128,7 +141,7 @@ class LiveControlTests(unittest.TestCase):
         )
         plan = cutup.build_audio_plan("cutup_01", [event], args, 2000, 100, 700)
         self.assertEqual(plan["kind"], "cutups.audio_composition_plan")
-        self.assertEqual(plan["version"], 1)
+        self.assertEqual(plan["version"], 2)
         self.assertEqual(plan["summary"]["event_count"], 1)
         self.assertEqual(plan["summary"]["cue_event_count"], 1)
         self.assertEqual(plan["config"]["beat_grid_ms"], 125)
@@ -136,6 +149,13 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["config"]["source_score"], "spoken")
         self.assertEqual(plan["config"]["source_diversity"], 0.65)
         self.assertEqual(plan["events"][0]["transform_tags"], ["slice", "grid"])
+        self.assertEqual(plan["events"][0]["planner"]["selection_reason"], "weighted_source")
+        self.assertEqual(plan["events"][0]["planner"]["source_weight"]["source_score_mode"], "spoken")
+        self.assertEqual(plan["events"][0]["planner"]["source_weight"]["final_weight"], 3.264)
+        self.assertEqual(plan["events"][0]["planner"]["source_weight"]["use_count_before"], 2)
+        self.assertTrue(plan["events"][0]["planner"]["source_weight"]["immediate_repeat"])
+        self.assertEqual(plan["events"][0]["planner"]["section_targets"]["fragment_multiplier"], 1.2)
+        self.assertNotIn("source_final_weight", plan["events"][0])
         self.assertEqual(len(plan["section_windows"]), 5)
         self.assertEqual(len(plan["section_targets"]), 5)
         self.assertEqual(plan["section_targets"][0]["section_arc"], "spoken")
@@ -327,6 +347,30 @@ class LiveControlTests(unittest.TestCase):
         self.assertGreater(cutup.source_material_score(voice, spoken_args), cutup.source_material_score(noise, spoken_args))
         self.assertGreater(cutup.source_material_score(loop, beat_args), cutup.source_material_score(voice, beat_args))
         self.assertGreater(cutup.source_material_score(noise, breach_args, profile=pressure), cutup.source_material_score(voice, breach_args, profile=pressure))
+
+    def test_source_selection_diagnostics_report_weight_context(self) -> None:
+        sample = cutup.SampleFile(path=Path("radio_static_dropout.wav"), duration_ms=900, words=1, intensity_hint=3, loop_hint=0)
+        args = types.SimpleNamespace(source_score="breach", source_diversity=1.0, bpm=0.0, slice_grid="off", concrete=True)
+        source_counts = Counter({str(sample.path): 3})
+        diagnostics = cutup.source_selection_diagnostics(
+            sample,
+            args,
+            concrete=True,
+            source_counts=source_counts,
+            recent_source_keys=[str(sample.path), str(sample.path), "other.wav"],
+            previous_sample=sample,
+            profile={"name": "COLLAPSE", "dens": 1.4, "frag_mul": 0.5, "repeat": 0.7, "ghost": 0.6},
+            reason="weighted_source_fallback",
+        )
+        self.assertEqual(diagnostics["selection_reason"], "weighted_source_fallback")
+        self.assertEqual(diagnostics["source_score_mode"], "breach")
+        self.assertEqual(diagnostics["source_use_count_before"], 3)
+        self.assertEqual(diagnostics["source_recent_hits_before"], 2)
+        self.assertTrue(diagnostics["source_immediate_repeat"])
+        self.assertGreater(diagnostics["source_material_score"], 1.0)
+        self.assertLess(diagnostics["source_diversity_multiplier"], 1.0)
+        self.assertGreater(diagnostics["source_final_weight"], 0.0)
+        self.assertEqual(diagnostics["section_density_target"], 1.4)
 
     def test_filter_pair_hard_is_narrower_than_light(self) -> None:
         hard_args = types.SimpleNamespace(filter_severity="hard")

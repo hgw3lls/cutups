@@ -161,13 +161,16 @@ class AudioSmokeTests(unittest.TestCase):
 
             rows = list(csv.DictReader(events.open(newline="", encoding="utf-8")))
             self.assertGreaterEqual(len(rows), 1)
+            self.assertIn("selection_reason", rows[0])
+            self.assertIn("source_final_weight", rows[0])
+            self.assertIn("section_density_target", rows[0])
             transforms = " ".join(row["transformation"] for row in rows)
             for tag in ("+grid", "+beatstutter", "+beatmute", "+beatrepeat", "+beatdrop"):
                 self.assertIn(tag, transforms)
 
             render_plan = json.loads(plan.read_text(encoding="utf-8"))
             self.assertEqual(render_plan["kind"], "cutups.audio_composition_plan")
-            self.assertEqual(render_plan["version"], 1)
+            self.assertEqual(render_plan["version"], 2)
             self.assertEqual(render_plan["variant"], "cutup_01")
             self.assertEqual(render_plan["seed"], 101)
             self.assertEqual(render_plan["preset"], "beat-cutup")
@@ -182,6 +185,11 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(len(render_plan["section_windows"]), 5)
             self.assertEqual(len(render_plan["section_targets"]), 5)
             self.assertIn("transform_tags", render_plan["events"][0])
+            self.assertIn("planner", render_plan["events"][0])
+            self.assertIn("selection_reason", render_plan["events"][0]["planner"])
+            self.assertIn("source_weight", render_plan["events"][0]["planner"])
+            self.assertIn("section_targets", render_plan["events"][0]["planner"])
+            self.assertEqual(render_plan["events"][0]["planner"]["source_weight"]["source_score_mode"], "beat")
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
