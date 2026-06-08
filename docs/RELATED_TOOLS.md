@@ -45,18 +45,17 @@ Use these projects as references, not embedded dependencies.
 ## Proposed Future Work
 
 1. Keep optional analysis dependency checks visible in `--doctor` without making them required for normal rendering.
-2. Extend the current JSON analysis cache into reusable read/update behavior.
-3. Expand native lightweight beat descriptors:
+2. Expand native lightweight beat descriptors:
    - duration
    - RMS / loudness
    - zero-crossing rate
    - spectral centroid if `librosa` is installed
-4. Add beat jump planning:
+3. Add beat jump planning:
    - `--beat-jump-mode random|similarity`
    - `--beat-similarity-weight`
    - `--beat-novelty`
    - `--analysis-cache`
-5. Add corpus/target matching for spoken-word and signal-breach workflows after beat similarity is stable.
+4. Add corpus/target matching for spoken-word and signal-breach workflows after beat similarity is stable.
 
 ## Non-goals
 

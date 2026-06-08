@@ -214,7 +214,7 @@ By default, if the requested output folder already exists and contains files, `c
 
 Use `--preview-duration <seconds>` to write a short `cutup_XX_preview.wav` beside each full master for fast auditioning.
 
-Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`.
+Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again.
 
 ## Validation
 

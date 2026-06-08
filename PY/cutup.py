@@ -529,7 +529,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
-    p.add_argument("--analysis-cache", default="", help="Write a lightweight JSON source analysis cache for audio mode. Use 'auto' for output/audio_analysis_cache.json.")
+    p.add_argument("--analysis-cache", default="", help="Write/update a lightweight JSON source analysis cache for audio mode. Use 'auto' for output/audio_analysis_cache.json.")
 
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
     p.add_argument("--cue-file", default="", help="Optional SRT or CSV cue file for phrase-aware audio slicing.")
@@ -2053,22 +2053,91 @@ def finite_audio_float(value: float) -> Optional[float]:
     return round(number, 3)
 
 
+def audio_file_stat(path: Path) -> Tuple[int, int]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0, 0
+    return stat.st_size, int(stat.st_mtime)
+
+
+def analysis_cache_key(path: str, cue_start_ms: int, cue_end_ms: int, cue_index: int, sample_rate: int) -> str:
+    resolved = Path(path).expanduser().resolve()
+    return f"{resolved}|cue={cue_start_ms}:{cue_end_ms}:{cue_index}|sr={sample_rate}"
+
+
+def analysis_cache_key_for_sample(sample: SampleFile, args: argparse.Namespace) -> str:
+    return analysis_cache_key(str(sample.path), sample.cue_start_ms, sample.cue_end_ms, sample.cue_index, int(args.sample_rate))
+
+
+def analysis_cache_key_for_entry(entry: Dict[str, object], default_sample_rate: int) -> str:
+    sample_rate = safe_int(str(entry.get("analysis_sample_rate", default_sample_rate)), default_sample_rate)
+    return analysis_cache_key(
+        str(entry.get("path", "")),
+        safe_int(str(entry.get("cue_start_ms", 0)), 0),
+        safe_int(str(entry.get("cue_end_ms", 0)), 0),
+        safe_int(str(entry.get("cue_index", 0)), 0),
+        sample_rate,
+    )
+
+
+def load_analysis_cache(path: Path) -> Dict[str, object]:
+    if not path.exists() or path.is_dir():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("kind") != "cutups.audio_analysis_cache":
+        return {}
+    if safe_int(str(payload.get("version", 0)), 0) > ANALYSIS_CACHE_VERSION:
+        return {}
+    return payload
+
+
+def cached_analysis_entries(payload: Dict[str, object]) -> Dict[str, Dict[str, object]]:
+    default_sample_rate = safe_int(str(payload.get("sample_rate", 0)), 0)
+    rows = payload.get("samples", [])
+    if not isinstance(rows, list):
+        return {}
+    entries: Dict[str, Dict[str, object]] = {}
+    for raw in rows:
+        if not isinstance(raw, dict) or not raw.get("path"):
+            continue
+        key = str(raw.get("cache_key") or analysis_cache_key_for_entry(raw, default_sample_rate))
+        entries[key] = raw
+    return entries
+
+
+def cached_entry_matches_sample(entry: Dict[str, object], sample: SampleFile, args: argparse.Namespace) -> bool:
+    if str(entry.get("cache_key") or analysis_cache_key_for_entry(entry, int(args.sample_rate))) != analysis_cache_key_for_sample(sample, args):
+        return False
+    size_bytes, mtime = audio_file_stat(sample.path)
+    return (
+        safe_int(str(entry.get("file_size_bytes", -1)), -1) == size_bytes
+        and safe_int(str(entry.get("file_mtime", -1)), -1) == mtime
+        and safe_int(str(entry.get("cue_start_ms", -1)), -1) == sample.cue_start_ms
+        and safe_int(str(entry.get("cue_end_ms", -1)), -1) == sample.cue_end_ms
+        and safe_int(str(entry.get("cue_index", -1)), -1) == sample.cue_index
+        and safe_int(str(entry.get("analysis_sample_rate", args.sample_rate)), int(args.sample_rate)) == int(args.sample_rate)
+    )
+
+
 def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, index: int) -> Dict[str, object]:
     audio = source_audio_for_sample(sample, args)
-    try:
-        stat = sample.path.stat()
-        size_bytes = stat.st_size
-        mtime = int(stat.st_mtime)
-    except OSError:
-        size_bytes = 0
-        mtime = 0
+    size_bytes, mtime = audio_file_stat(sample.path)
     return {
         "index": index,
+        "cache_key": analysis_cache_key_for_sample(sample, args),
+        "cache_state": "fresh",
         "path": str(sample.path),
         "basename": sample.path.name,
         "suffix": sample.path.suffix.lower(),
         "file_size_bytes": size_bytes,
         "file_mtime": mtime,
+        "analysis_sample_rate": args.sample_rate,
         "duration_ms": len(audio),
         "cue_start_ms": sample.cue_start_ms,
         "cue_end_ms": sample.cue_end_ms,
@@ -2096,11 +2165,25 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
     except OSError as exc:
         raise SystemExit(f"Failed to create analysis cache folder '{path.parent}': {exc}") from exc
 
+    existing_entries = cached_analysis_entries(load_analysis_cache(path)) if path.exists() and args.overwrite else {}
     entries: List[Dict[str, object]] = []
     errors: List[Dict[str, str]] = []
+    reused = 0
+    refreshed = 0
     for index, sample in enumerate(samples, start=1):
+        cache_key = analysis_cache_key_for_sample(sample, args)
+        cached = existing_entries.get(cache_key)
+        if cached and cached_entry_matches_sample(cached, sample, args):
+            entry = dict(cached)
+            entry["index"] = index
+            entry["cache_key"] = cache_key
+            entry["cache_state"] = "reused"
+            entries.append(entry)
+            reused += 1
+            continue
         try:
             entries.append(analysis_entry_for_sample(sample, args, index))
+            refreshed += 1
         except Exception as exc:
             errors.append({"path": str(sample.path), "error": str(exc)})
 
@@ -2112,6 +2195,7 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
         "bpm": args.bpm,
         "slice_grid": args.slice_grid,
         "grid_ms": beat_grid_ms(args),
+        "cache_stats": {"reused": reused, "refreshed": refreshed, "errors": len(errors)},
         "samples": entries,
         "errors": errors,
     }
@@ -2832,7 +2916,15 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
     if analysis_cache:
         cache_path = write_analysis_cache(analysis_cache, samples, args, input_root)
         summary.output_paths.append(str(cache_path))
-        print(f"Analysis cache written: {cache_path}")
+        cache_payload = load_analysis_cache(cache_path)
+        cache_stats = cache_payload.get("cache_stats", {}) if cache_payload else {}
+        if isinstance(cache_stats, dict):
+            print(
+                f"Analysis cache written: {cache_path} "
+                f"(reused={cache_stats.get('reused', 0)}, refreshed={cache_stats.get('refreshed', 0)})"
+            )
+        else:
+            print(f"Analysis cache written: {cache_path}")
 
     audio_out = output_root / "audio_cutups"
     audio_out.mkdir(parents=True, exist_ok=True)

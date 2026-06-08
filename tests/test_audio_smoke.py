@@ -134,6 +134,9 @@ class AudioSmokeTests(unittest.TestCase):
                 ]
             )
             self.assertIn("Audio events placed:", result.stdout)
+            self.assertIn("Analysis cache written:", result.stdout)
+            self.assertIn("reused=0", result.stdout)
+            self.assertIn("refreshed=1", result.stdout)
 
             variant = output / "audio_cutups" / "cutup_01"
             master = variant / "cutup_01_master.wav"
@@ -159,8 +162,10 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
             self.assertEqual(cache["version"], 1)
             self.assertEqual(cache["grid_ms"], 125)
+            self.assertEqual(cache["cache_stats"], {"errors": 0, "refreshed": 1, "reused": 0})
             self.assertEqual(len(cache["samples"]), 1)
             self.assertEqual(cache["samples"][0]["basename"], source.name)
+            self.assertEqual(cache["samples"][0]["cache_state"], "fresh")
             self.assertEqual(cache["samples"][0]["channels"], 2)
             self.assertGreater(cache["samples"][0]["duration_ms"], 0)
 

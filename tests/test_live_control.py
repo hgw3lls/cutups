@@ -297,6 +297,49 @@ class LiveControlTests(unittest.TestCase):
                 cutup.write_analysis_cache(cache, [], args, Path(td))
             self.assertEqual(cache.read_text(encoding="utf-8"), "keep me\n")
 
+    def test_write_analysis_cache_reuses_matching_existing_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audio_path = root / "voice.wav"
+            audio_path.write_bytes(b"placeholder")
+            cache = root / "sources.json"
+            args = types.SimpleNamespace(overwrite=True, sample_rate=44100, bpm=120.0, slice_grid="1/16")
+            sample = cutup.SampleFile(path=audio_path, duration_ms=1000, words=1, intensity_hint=0, loop_hint=0)
+            size_bytes, mtime = cutup.audio_file_stat(audio_path)
+            entry = {
+                "index": 1,
+                "cache_key": cutup.analysis_cache_key_for_sample(sample, args),
+                "cache_state": "fresh",
+                "path": str(audio_path),
+                "basename": audio_path.name,
+                "file_size_bytes": size_bytes,
+                "file_mtime": mtime,
+                "analysis_sample_rate": 44100,
+                "duration_ms": 1000,
+                "cue_start_ms": 0,
+                "cue_end_ms": 0,
+                "cue_index": 0,
+                "rms": 123,
+            }
+            cache.write_text(
+                json.dumps(
+                    {
+                        "version": cutup.ANALYSIS_CACHE_VERSION,
+                        "kind": "cutups.audio_analysis_cache",
+                        "sample_rate": 44100,
+                        "samples": [entry],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cutup.write_analysis_cache(cache, [sample], args, root)
+
+            payload = json.loads(cache.read_text(encoding="utf-8"))
+            self.assertEqual(payload["cache_stats"], {"errors": 0, "refreshed": 0, "reused": 1})
+            self.assertEqual(payload["samples"][0]["cache_state"], "reused")
+            self.assertEqual(payload["samples"][0]["rms"], 123)
+
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             control_path = Path(td) / "live.json"
