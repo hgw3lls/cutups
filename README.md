@@ -369,11 +369,14 @@ Inside your `--output` directory you will usually see:
 - `audio_cutups/cutup_XX/cutup_XX_master.wav`
 - `audio_cutups/cutup_XX/cutup_XX_preview.wav` (when `--preview-duration` is set)
 - `audio_cutups/cutup_XX/cutup_XX_events.csv`
+- `audio_cutups/cutup_XX/cutup_XX_plan.json`
 - `audio_cutups/cutup_XX/cutup_XX_score.txt`
 - `audio_analysis_cache.json` (when `--analysis-cache auto` is set)
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
 
 When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`, `source_cue_end_ms`, and `source_cue_text`.
+
+`cutup_XX_plan.json` records the rendered composition plan: section windows, event ordering, source/layer/transform summaries, cue counts, and the render settings used for the variant. This is the inspection surface for tuning smarter cutup construction.
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
 

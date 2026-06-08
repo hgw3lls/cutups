@@ -80,6 +80,57 @@ class LiveControlTests(unittest.TestCase):
         self.assertIn("--init-qa-sources ../cutups_qa_sources", text)
         self.assertIn("## signal-breach", text)
 
+    def test_build_audio_plan_summarizes_events(self) -> None:
+        event = cutup.Event(
+            layer="voice_main",
+            section="BUILD",
+            source="/tmp/source.wav",
+            source_basename="source.wav",
+            source_duration_ms=1000,
+            source_cue_start_ms=100,
+            source_cue_end_ms=700,
+            source_cue_text="testing one phrase",
+            start_ms=250,
+            end_ms=850,
+            fragment_duration_ms=600,
+            gain_db=-4.0,
+            reversed=False,
+            speed=1.0,
+            repeated=1,
+            hp_hz=120,
+            lp_hz=3200,
+            grain_mode=False,
+            from_memory=False,
+            transformation="slice+grid",
+            layer_role="foreground",
+            recurrence_index=1,
+        )
+        args = types.SimpleNamespace(
+            seed=9,
+            preset="spoken-word-cutup",
+            mode="audio",
+            density="medium",
+            sectional=True,
+            arrangement_style="sequential",
+            concrete=False,
+            bed_noise=False,
+            sample_rate=44100,
+            master_gain=-3.0,
+            bpm=120.0,
+            slice_grid="1/16",
+            beat_jump_mode="random",
+            beat_similarity_weight=1.0,
+            beat_novelty=0.0,
+        )
+        plan = cutup.build_audio_plan("cutup_01", [event], args, 2000, 100, 700)
+        self.assertEqual(plan["kind"], "cutups.audio_composition_plan")
+        self.assertEqual(plan["version"], 1)
+        self.assertEqual(plan["summary"]["event_count"], 1)
+        self.assertEqual(plan["summary"]["cue_event_count"], 1)
+        self.assertEqual(plan["config"]["beat_grid_ms"], 125)
+        self.assertEqual(plan["events"][0]["transform_tags"], ["slice", "grid"])
+        self.assertEqual(len(plan["section_windows"]), 5)
+
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "qa_sources"

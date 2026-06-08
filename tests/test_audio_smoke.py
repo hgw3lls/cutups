@@ -148,9 +148,10 @@ class AudioSmokeTests(unittest.TestCase):
             master = variant / "cutup_01_master.wav"
             preview = variant / "cutup_01_preview.wav"
             events = variant / "cutup_01_events.csv"
+            plan = variant / "cutup_01_plan.json"
             score = variant / "cutup_01_score.txt"
             analysis_cache = output / "audio_analysis_cache.json"
-            for path in (master, preview, events, score, analysis_cache):
+            for path in (master, preview, events, plan, score, analysis_cache):
                 self.assertTrue(path.exists(), path)
 
             self.assertEqual(_wav_info(master)[:2], (2, 44100))
@@ -163,6 +164,20 @@ class AudioSmokeTests(unittest.TestCase):
             transforms = " ".join(row["transformation"] for row in rows)
             for tag in ("+grid", "+beatstutter", "+beatmute", "+beatrepeat", "+beatdrop"):
                 self.assertIn(tag, transforms)
+
+            render_plan = json.loads(plan.read_text(encoding="utf-8"))
+            self.assertEqual(render_plan["kind"], "cutups.audio_composition_plan")
+            self.assertEqual(render_plan["version"], 1)
+            self.assertEqual(render_plan["variant"], "cutup_01")
+            self.assertEqual(render_plan["seed"], 101)
+            self.assertEqual(render_plan["preset"], "beat-cutup")
+            self.assertEqual(render_plan["duration_ms"], 3000)
+            self.assertEqual(render_plan["config"]["beat_grid_ms"], 125)
+            self.assertEqual(render_plan["config"]["beat_novelty"], 0.4)
+            self.assertEqual(render_plan["summary"]["event_count"], len(rows))
+            self.assertEqual(len(render_plan["events"]), len(rows))
+            self.assertEqual(len(render_plan["section_windows"]), 5)
+            self.assertIn("transform_tags", render_plan["events"][0])
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))
             self.assertEqual(cache["kind"], "cutups.audio_analysis_cache")
@@ -292,6 +307,10 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(
                 _hash_file(variant_a / "cutup_01_events.csv"),
                 _hash_file(variant_b / "cutup_01_events.csv"),
+            )
+            self.assertEqual(
+                _hash_file(variant_a / "cutup_01_plan.json"),
+                _hash_file(variant_b / "cutup_01_plan.json"),
             )
             self.assertEqual(
                 _hash_file(variant_a / "cutup_01_master.wav"),

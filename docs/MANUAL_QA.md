@@ -95,6 +95,7 @@ Check these files after each render:
 - `out/manual_qa/beat_*/audio_cutups/cutup_01/cutup_01_master.wav`
 - `out/manual_qa/beat_*/audio_cutups/cutup_01/cutup_01_preview.wav`
 - `out/manual_qa/beat_*/audio_cutups/cutup_01/cutup_01_events.csv`
+- `out/manual_qa/beat_*/audio_cutups/cutup_01/cutup_01_plan.json`
 
 Listening notes:
 
@@ -103,6 +104,7 @@ Listening notes:
 - `beat_disruptive` should produce more obvious source contrast and interruption.
 - Grid timing should still feel locked to the supplied BPM.
 - `cutup_01_events.csv` should show source changes and grid-aligned start positions.
+- `cutup_01_plan.json` should summarize section counts, top sources, transform tags, and grid settings.
 
 ## Beat Damage
 
@@ -235,4 +237,4 @@ Listening notes:
 - If audio import/export fails, run `python3 PY/cutup.py --doctor` and fix `ffmpeg` first.
 - If a source folder is missing or empty, the command should fail clearly before rendering.
 - If an output folder already contains files, `cutups` should choose a numbered sibling unless `--overwrite` is passed.
-- If `--analysis-cache auto` is used, confirm the cache is under the output folder and includes `version`, `samples`, `grid_ms`, and `beat_jump_plan`.
+- Confirm each audio variant writes `cutup_01_plan.json`; if `--analysis-cache auto` is used, confirm the cache is under the output folder and includes `version`, `samples`, `grid_ms`, and `beat_jump_plan`.

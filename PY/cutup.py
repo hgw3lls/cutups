@@ -136,6 +136,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
 ANALYSIS_CACHE_VERSION = 7
+AUDIO_PLAN_VERSION = 1
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
 ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
@@ -3224,6 +3225,134 @@ def export_manifest(path: Path, events: List[Event]) -> None:
             writer.writerow(e.__dict__)
 
 
+def sorted_count_map(counter: Counter) -> Dict[str, int]:
+    return {str(key): int(counter[key]) for key in sorted(counter)}
+
+
+def top_count_rows(counter: Counter, limit: int = 8) -> List[Dict[str, object]]:
+    rows = sorted(counter.items(), key=lambda item: (-int(item[1]), str(item[0])))
+    return [{"value": str(key), "count": int(count)} for key, count in rows[:limit]]
+
+
+def section_window_rows(total_ms: int) -> List[Dict[str, object]]:
+    plan = section_plan(total_ms)
+    rows = []
+    for name in SECTION_NAMES:
+        start_ms, end_ms = plan[name]
+        rows.append(
+            {
+                "name": name,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "duration_ms": max(0, end_ms - start_ms),
+                "start_sec": round(start_ms / 1000.0, 3),
+                "end_sec": round(end_ms / 1000.0, 3),
+            }
+        )
+    return rows
+
+
+def event_plan_row(event: Event, index: int) -> Dict[str, object]:
+    row = dict(event.__dict__)
+    row["event_index"] = index
+    row["start_sec"] = round(event.start_ms / 1000.0, 3)
+    row["end_sec"] = round(event.end_ms / 1000.0, 3)
+    row["fragment_duration_sec"] = round(event.fragment_duration_ms / 1000.0, 3)
+    row["transform_tags"] = [tag for tag in event.transformation.split("+") if tag]
+    row["has_cue"] = bool(event.source_cue_end_ms > event.source_cue_start_ms)
+    return row
+
+
+def section_summary_rows(events: List[Event], total_ms: int) -> List[Dict[str, object]]:
+    by_section: Dict[str, List[Event]] = {name: [] for name in SECTION_NAMES}
+    for event in events:
+        by_section.setdefault(event.section, []).append(event)
+    windows = {row["name"]: row for row in section_window_rows(total_ms)}
+    rows = []
+    for name in SECTION_NAMES:
+        items = sorted(by_section.get(name, []), key=lambda event: (event.start_ms, event.layer, event.source_basename))
+        window = windows[name]
+        layer_counts = Counter(event.layer for event in items)
+        source_counts = Counter(event.source_basename for event in items)
+        transformation_counts = Counter(event.transformation for event in items)
+        fragment_total = sum(event.fragment_duration_ms for event in items)
+        rows.append(
+            {
+                "name": name,
+                "start_ms": window["start_ms"],
+                "end_ms": window["end_ms"],
+                "event_count": len(items),
+                "layer_counts": sorted_count_map(layer_counts),
+                "top_sources": top_count_rows(source_counts, limit=5),
+                "top_transformations": top_count_rows(transformation_counts, limit=5),
+                "memory_event_count": sum(1 for event in items if event.from_memory),
+                "average_fragment_ms": round(fragment_total / len(items), 2) if items else 0.0,
+            }
+        )
+    return rows
+
+
+def build_audio_plan(
+    variant_name: str,
+    events: List[Event],
+    args: argparse.Namespace,
+    total_ms: int,
+    min_frag_ms: int,
+    max_frag_ms: int,
+) -> Dict[str, object]:
+    layer_counts = Counter(event.layer for event in events)
+    section_counts = Counter(event.section for event in events)
+    source_counts = Counter(event.source_basename for event in events)
+    transformation_counts = Counter(event.transformation for event in events)
+    return {
+        "kind": "cutups.audio_composition_plan",
+        "version": AUDIO_PLAN_VERSION,
+        "variant": variant_name,
+        "seed": int(args.seed),
+        "preset": str(args.preset or ""),
+        "mode": str(args.mode),
+        "duration_ms": total_ms,
+        "config": {
+            "density": str(args.density),
+            "sectional": bool(args.sectional),
+            "arrangement_style": str(args.arrangement_style),
+            "concrete": bool(args.concrete),
+            "bed_noise": bool(args.bed_noise),
+            "sample_rate": int(args.sample_rate),
+            "master_gain": float(args.master_gain),
+            "min_frag_ms": min_frag_ms,
+            "max_frag_ms": max_frag_ms,
+            "bpm": float(args.bpm),
+            "slice_grid": str(args.slice_grid),
+            "beat_grid_ms": beat_grid_ms(args),
+            "beat_jump_mode": str(args.beat_jump_mode),
+            "beat_similarity_weight": float(args.beat_similarity_weight),
+            "beat_novelty": float(args.beat_novelty),
+        },
+        "summary": {
+            "event_count": len(events),
+            "source_count": len({event.source for event in events}),
+            "memory_event_count": sum(1 for event in events if event.from_memory),
+            "cue_event_count": sum(1 for event in events if event.source_cue_end_ms > event.source_cue_start_ms),
+            "layer_counts": sorted_count_map(layer_counts),
+            "section_counts": sorted_count_map(section_counts),
+            "top_sources": top_count_rows(source_counts, limit=8),
+            "top_transformations": top_count_rows(transformation_counts, limit=8),
+        },
+        "section_windows": section_window_rows(total_ms),
+        "sections": section_summary_rows(events, total_ms),
+        "events": [event_plan_row(event, index) for index, event in enumerate(sorted(events, key=lambda event: (event.start_ms, event.layer, event.source_basename)))],
+        "composition_notes": [
+            "This plan records the event decisions used to render the audio.",
+            "Future planner passes can score, reorder, or mutate this structure before rendering.",
+        ],
+    }
+
+
+def export_audio_plan(path: Path, plan: Dict[str, object]) -> None:
+    path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def build_section_score(events: List[Event]) -> str:
     if not events:
         return "NO EVENTS\n"
@@ -3511,6 +3640,7 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
     hiss.export(stems_dir / "hiss_bed.wav", format="wav")
     master_path = variant_dir / f"{variant_name}_master.wav"
     event_path = variant_dir / f"{variant_name}_events.csv"
+    plan_path = variant_dir / f"{variant_name}_plan.json"
     score_path = variant_dir / f"{variant_name}_score.txt"
     master.export(master_path, format="wav")
     preview_path: Optional[Path] = None
@@ -3519,12 +3649,13 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
         preview_path = variant_dir / f"{variant_name}_preview.wav"
         master[:preview_ms].export(preview_path, format="wav")
     export_manifest(event_path, events)
+    export_audio_plan(plan_path, build_audio_plan(variant_name, events, args, total_ms, min_frag_ms, max_frag_ms))
     score_path.write_text(build_section_score(events), encoding="utf-8")
 
     summary.audio_events += len(events)
     summary.section_distribution.update([e.section for e in events])
     summary.recurring_sources.update([e.source_basename for e in events if e.recurrence_index > 1])
-    summary.output_paths.extend([str(master_path), str(event_path), str(score_path)])
+    summary.output_paths.extend([str(master_path), str(event_path), str(plan_path), str(score_path)])
     if preview_path:
         summary.output_paths.append(str(preview_path))
 
