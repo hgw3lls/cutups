@@ -112,6 +112,7 @@ class LiveControlTests(unittest.TestCase):
             mode="audio",
             density="medium",
             sectional=True,
+            section_arc="spoken",
             arrangement_style="sequential",
             source_diversity=0.65,
             concrete=False,
@@ -130,9 +131,12 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["event_count"], 1)
         self.assertEqual(plan["summary"]["cue_event_count"], 1)
         self.assertEqual(plan["config"]["beat_grid_ms"], 125)
+        self.assertEqual(plan["config"]["section_arc"], "spoken")
         self.assertEqual(plan["config"]["source_diversity"], 0.65)
         self.assertEqual(plan["events"][0]["transform_tags"], ["slice", "grid"])
         self.assertEqual(len(plan["section_windows"]), 5)
+        self.assertEqual(len(plan["section_targets"]), 5)
+        self.assertEqual(plan["section_targets"][0]["section_arc"], "spoken")
 
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -242,6 +246,7 @@ class LiveControlTests(unittest.TestCase):
         args = types.SimpleNamespace(preset="beat-cutup", _explicit_args=set(), slice_grid="off")
         cutup.apply_preset(args)
         self.assertEqual(args.slice_grid, "1/16")
+        self.assertEqual(args.section_arc, "pulse")
         self.assertEqual(args.stutter_rate, 0.48)
         self.assertEqual(args.mute_rate, 0.18)
         self.assertEqual(args.repeat_rate, 0.38)
@@ -266,6 +271,7 @@ class LiveControlTests(unittest.TestCase):
         )
         cutup.apply_preset(args)
         self.assertEqual(args.phrase_length, "medium")
+        self.assertEqual(args.section_arc, "spoken")
         self.assertEqual(args.intelligibility, "high")
         self.assertEqual(args.interruption_density, "low")
         self.assertEqual(args.silence_insert_ms, "120:420")
@@ -281,9 +287,20 @@ class LiveControlTests(unittest.TestCase):
         )
         cutup.apply_preset(args)
         self.assertEqual(args.burst_rate, 0.58)
+        self.assertEqual(args.section_arc, "breach")
         self.assertEqual(args.dropout_rate, 0.64)
         self.assertEqual(args.reverse_shard_rate, 0.46)
         self.assertEqual(args.filter_severity, "hard")
+
+    def test_section_arc_modifies_classic_profile(self) -> None:
+        base_args = types.SimpleNamespace(section_arc="classic", silence_prob=0.2, ghost_prob=0.3)
+        breach_args = types.SimpleNamespace(section_arc="breach", silence_prob=0.2, ghost_prob=0.3)
+        classic = cutup.section_profile(cutup.SECTION_PROGRESS["COLLAPSE"], base_args)
+        breach = cutup.section_profile(cutup.SECTION_PROGRESS["COLLAPSE"], breach_args)
+        self.assertEqual(classic["arc"], "classic")
+        self.assertEqual(breach["arc"], "breach")
+        self.assertGreater(breach["dens"], classic["dens"])
+        self.assertLess(breach["frag_mul"], classic["frag_mul"])
 
     def test_filter_pair_hard_is_narrower_than_light(self) -> None:
         hard_args = types.SimpleNamespace(filter_severity="hard")

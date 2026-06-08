@@ -173,11 +173,13 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["preset"], "beat-cutup")
             self.assertEqual(render_plan["duration_ms"], 3000)
             self.assertEqual(render_plan["config"]["beat_grid_ms"], 125)
+            self.assertEqual(render_plan["config"]["section_arc"], "pulse")
             self.assertEqual(render_plan["config"]["source_diversity"], 0.35)
             self.assertEqual(render_plan["config"]["beat_novelty"], 0.4)
             self.assertEqual(render_plan["summary"]["event_count"], len(rows))
             self.assertEqual(len(render_plan["events"]), len(rows))
             self.assertEqual(len(render_plan["section_windows"]), 5)
+            self.assertEqual(len(render_plan["section_targets"]), 5)
             self.assertIn("transform_tags", render_plan["events"][0])
 
             cache = json.loads(analysis_cache.read_text(encoding="utf-8"))

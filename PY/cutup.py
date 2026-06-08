@@ -86,6 +86,39 @@ SECTION_PROGRESS = {
     "COLLAPSE": 0.76,
     "AFTERIMAGE": 0.93,
 }
+SECTION_ARCS = ("classic", "spoken", "breach", "pulse", "ghost")
+SECTION_PROFILE_KEYS = ("dens", "frag_mul", "repeat", "reverse", "filt", "silence", "ghost")
+SECTION_ARC_MODIFIERS: Dict[str, Dict[str, Dict[str, float]]] = {
+    "classic": {},
+    "spoken": {
+        "ENTRY": {"dens": 0.8, "frag_mul": 1.25, "repeat": 0.5, "reverse": 0.4, "filt": 0.55, "silence": 0.8, "ghost": 0.8},
+        "BUILD": {"dens": 0.95, "frag_mul": 1.2, "repeat": 0.55, "reverse": 0.45, "filt": 0.65, "silence": 0.7, "ghost": 0.85},
+        "PRESSURE": {"dens": 1.0, "frag_mul": 0.95, "repeat": 0.65, "reverse": 0.55, "filt": 0.75, "silence": 0.85, "ghost": 1.0},
+        "COLLAPSE": {"dens": 0.55, "frag_mul": 0.8, "repeat": 0.75, "reverse": 0.7, "filt": 0.8, "silence": 1.1, "ghost": 1.1},
+        "AFTERIMAGE": {"dens": 0.45, "frag_mul": 0.75, "repeat": 0.8, "reverse": 0.75, "filt": 0.85, "silence": 1.15, "ghost": 1.3},
+    },
+    "breach": {
+        "ENTRY": {"dens": 0.55, "frag_mul": 1.4, "repeat": 0.75, "reverse": 0.8, "filt": 1.1, "silence": 1.35, "ghost": 0.8},
+        "BUILD": {"dens": 1.05, "frag_mul": 0.9, "repeat": 1.1, "reverse": 1.0, "filt": 1.0, "silence": 0.9, "ghost": 1.0},
+        "PRESSURE": {"dens": 1.35, "frag_mul": 0.7, "repeat": 1.15, "reverse": 1.15, "filt": 1.1, "silence": 0.75, "ghost": 1.1},
+        "COLLAPSE": {"dens": 1.45, "frag_mul": 0.55, "repeat": 1.2, "reverse": 1.15, "filt": 1.05, "silence": 1.25, "ghost": 1.25},
+        "AFTERIMAGE": {"dens": 0.55, "frag_mul": 0.8, "repeat": 1.0, "reverse": 1.1, "filt": 1.05, "silence": 1.35, "ghost": 1.3},
+    },
+    "pulse": {
+        "ENTRY": {"dens": 0.9, "frag_mul": 1.0, "repeat": 0.9, "reverse": 0.45, "filt": 0.75, "silence": 0.75, "ghost": 0.6},
+        "BUILD": {"dens": 1.15, "frag_mul": 0.9, "repeat": 1.15, "reverse": 0.55, "filt": 0.8, "silence": 0.65, "ghost": 0.75},
+        "PRESSURE": {"dens": 1.35, "frag_mul": 0.75, "repeat": 1.25, "reverse": 0.7, "filt": 0.9, "silence": 0.55, "ghost": 0.85},
+        "COLLAPSE": {"dens": 1.05, "frag_mul": 0.6, "repeat": 1.35, "reverse": 0.8, "filt": 1.0, "silence": 0.85, "ghost": 1.0},
+        "AFTERIMAGE": {"dens": 0.7, "frag_mul": 0.65, "repeat": 1.2, "reverse": 0.8, "filt": 0.9, "silence": 0.95, "ghost": 1.1},
+    },
+    "ghost": {
+        "ENTRY": {"dens": 0.45, "frag_mul": 1.45, "repeat": 0.6, "reverse": 0.6, "filt": 0.9, "silence": 1.35, "ghost": 1.4},
+        "BUILD": {"dens": 0.65, "frag_mul": 1.2, "repeat": 0.75, "reverse": 0.7, "filt": 1.0, "silence": 1.2, "ghost": 1.5},
+        "PRESSURE": {"dens": 0.85, "frag_mul": 0.9, "repeat": 0.95, "reverse": 0.85, "filt": 1.05, "silence": 1.0, "ghost": 1.55},
+        "COLLAPSE": {"dens": 0.55, "frag_mul": 0.65, "repeat": 1.05, "reverse": 1.05, "filt": 1.05, "silence": 1.45, "ghost": 1.65},
+        "AFTERIMAGE": {"dens": 0.35, "frag_mul": 0.75, "repeat": 1.1, "reverse": 1.15, "filt": 1.1, "silence": 1.5, "ghost": 1.8},
+    },
+}
 SLICE_GRID_FACTORS: Dict[str, float] = {
     "off": 0.0,
     "1/4": 1.0,
@@ -185,6 +218,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
         "values": {
             "density": "dense",
             "sectional": True,
+            "section_arc": "breach",
             "concrete": True,
             "bed_noise": True,
             "arrangement_style": "collapse",
@@ -210,6 +244,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
         "values": {
             "density": "medium",
             "sectional": True,
+            "section_arc": "spoken",
             "concrete": False,
             "arrangement_style": "sequential",
             "memory_depth": 12,
@@ -235,6 +270,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
         "values": {
             "density": "dense",
             "sectional": False,
+            "section_arc": "pulse",
             "concrete": True,
             "arrangement_style": "swarm",
             "memory_depth": 16,
@@ -258,6 +294,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
         "values": {
             "density": "medium",
             "sectional": True,
+            "section_arc": "ghost",
             "concrete": True,
             "bed_noise": True,
             "arrangement_style": "swarm",
@@ -281,6 +318,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
         "values": {
             "density": "dense",
             "sectional": True,
+            "section_arc": "pulse",
             "concrete": True,
             "arrangement_style": "collapse",
             "memory_depth": 10,
@@ -305,6 +343,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
         "values": {
             "density": "medium",
             "sectional": True,
+            "section_arc": "ghost",
             "concrete": False,
             "bed_noise": True,
             "arrangement_style": "collapse",
@@ -737,6 +776,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--density", choices=["sparse", "medium", "dense"], default="medium")
     p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
+    p.add_argument("--section-arc", choices=SECTION_ARCS, default="classic", help="Named section energy curve used when --sectional is active.")
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
     p.add_argument("--source-diversity", type=float, default=0.0, help="Source balancing 0..1; higher values penalize immediate and repeated source reuse.")
     p.add_argument("--bpm", type=float, default=0.0, help="Manual tempo for beat-grid slicing and placement. Use 0 to disable.")
@@ -1553,6 +1593,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"variants: {args.variants}")
     print(f"density: {args.density}")
     print(f"sectional: {args.sectional}")
+    print(f"section_arc: {args.section_arc}")
     print(f"arrangement_style: {args.arrangement_style}")
     print(f"source_diversity: {args.source_diversity:.2f}")
     print(f"concrete: {args.concrete}")
@@ -2958,16 +2999,45 @@ def choose_source_sample(
     )
 
 
-def section_profile(progress: float, args: argparse.Namespace) -> Dict[str, float]:
+def section_arc_name(args: argparse.Namespace) -> str:
+    arc = str(getattr(args, "section_arc", "classic") or "classic")
+    return arc if arc in SECTION_ARCS else "classic"
+
+
+def base_section_profile(progress: float, args: argparse.Namespace) -> Dict[str, float]:
+    silence_prob = float(getattr(args, "silence_prob", 0.15))
+    ghost_prob = float(getattr(args, "ghost_prob", 0.22))
     if progress < 0.2:
-        return {"name": "ENTRY", "dens": 0.44, "frag_mul": 1.28, "repeat": 0.2, "reverse": 0.14, "filt": 0.52, "silence": args.silence_prob + 0.16, "ghost": args.ghost_prob * 0.72}
+        return {"name": "ENTRY", "dens": 0.44, "frag_mul": 1.28, "repeat": 0.2, "reverse": 0.14, "filt": 0.52, "silence": silence_prob + 0.16, "ghost": ghost_prob * 0.72}
     if progress < 0.45:
-        return {"name": "BUILD", "dens": 1.18, "frag_mul": 0.82, "repeat": 0.42, "reverse": 0.22, "filt": 0.72, "silence": args.silence_prob * 0.88, "ghost": args.ghost_prob + 0.08}
+        return {"name": "BUILD", "dens": 1.18, "frag_mul": 0.82, "repeat": 0.42, "reverse": 0.22, "filt": 0.72, "silence": silence_prob * 0.88, "ghost": ghost_prob + 0.08}
     if progress < 0.68:
-        return {"name": "PRESSURE", "dens": 1.72, "frag_mul": 0.42, "repeat": 0.64, "reverse": 0.36, "filt": 0.92, "silence": args.silence_prob * 0.5, "ghost": args.ghost_prob + 0.19}
+        return {"name": "PRESSURE", "dens": 1.72, "frag_mul": 0.42, "repeat": 0.64, "reverse": 0.36, "filt": 0.92, "silence": silence_prob * 0.5, "ghost": ghost_prob + 0.19}
     if progress < 0.86:
-        return {"name": "COLLAPSE", "dens": 0.66, "frag_mul": 0.3, "repeat": 0.72, "reverse": 0.58, "filt": 0.98, "silence": args.silence_prob + 0.28, "ghost": args.ghost_prob + 0.3}
-    return {"name": "AFTERIMAGE", "dens": 0.3, "frag_mul": 0.24, "repeat": 0.78, "reverse": 0.68, "filt": 0.99, "silence": args.silence_prob + 0.33, "ghost": args.ghost_prob + 0.42}
+        return {"name": "COLLAPSE", "dens": 0.66, "frag_mul": 0.3, "repeat": 0.72, "reverse": 0.58, "filt": 0.98, "silence": silence_prob + 0.28, "ghost": ghost_prob + 0.3}
+    return {"name": "AFTERIMAGE", "dens": 0.3, "frag_mul": 0.24, "repeat": 0.78, "reverse": 0.68, "filt": 0.99, "silence": silence_prob + 0.33, "ghost": ghost_prob + 0.42}
+
+
+def apply_section_arc(profile: Dict[str, float], args: argparse.Namespace) -> Dict[str, float]:
+    out = dict(profile)
+    arc = section_arc_name(args)
+    modifiers = SECTION_ARC_MODIFIERS.get(arc, {}).get(str(out.get("name", "")), {})
+    for key in SECTION_PROFILE_KEYS:
+        value = float(out.get(key, 0.0)) * float(modifiers.get(key, 1.0))
+        value += float(modifiers.get(f"{key}_add", 0.0))
+        if key == "dens":
+            value = clamp(value, 0.12, 2.8)
+        elif key == "frag_mul":
+            value = clamp(value, 0.12, 2.2)
+        else:
+            value = clamp(value, 0.0, 0.99)
+        out[key] = value
+    out["arc"] = arc
+    return out
+
+
+def section_profile(progress: float, args: argparse.Namespace) -> Dict[str, float]:
+    return apply_section_arc(base_section_profile(progress, args), args)
 
 
 def section_plan(total_ms: int) -> Dict[str, Tuple[int, int]]:
@@ -3348,6 +3418,31 @@ def section_window_rows(total_ms: int) -> List[Dict[str, object]]:
     return rows
 
 
+def section_target_rows(args: argparse.Namespace, total_ms: int) -> List[Dict[str, object]]:
+    windows = {row["name"]: row for row in section_window_rows(total_ms)}
+    rows = []
+    for name in SECTION_NAMES:
+        profile = workflow_audio_profile(section_profile(SECTION_PROGRESS[name], args), args)
+        window = windows[name]
+        rows.append(
+            {
+                "name": name,
+                "section_arc": section_arc_name(args),
+                "start_ms": window["start_ms"],
+                "end_ms": window["end_ms"],
+                "density_target": round(float(profile["dens"]), 3),
+                "fragment_length_multiplier": round(float(profile["frag_mul"]), 3),
+                "repeat_probability": round(float(profile["repeat"]), 3),
+                "reverse_probability": round(float(profile["reverse"]), 3),
+                "filter_probability": round(float(profile["filt"]), 3),
+                "silence_probability": round(float(profile["silence"]), 3),
+                "ghost_probability": round(float(profile["ghost"]), 3),
+                "hard_cut_probability": round(float(profile.get("hard_cut", 0.0)), 3),
+            }
+        )
+    return rows
+
+
 def event_plan_row(event: Event, index: int) -> Dict[str, object]:
     row = dict(event.__dict__)
     row["event_index"] = index
@@ -3411,6 +3506,7 @@ def build_audio_plan(
         "config": {
             "density": str(args.density),
             "sectional": bool(args.sectional),
+            "section_arc": section_arc_name(args),
             "arrangement_style": str(args.arrangement_style),
             "source_diversity": float(args.source_diversity),
             "concrete": bool(args.concrete),
@@ -3437,6 +3533,7 @@ def build_audio_plan(
             "top_transformations": top_count_rows(transformation_counts, limit=8),
         },
         "section_windows": section_window_rows(total_ms),
+        "section_targets": section_target_rows(args, total_ms),
         "sections": section_summary_rows(events, total_ms),
         "events": [event_plan_row(event, index) for index, event in enumerate(sorted(events, key=lambda event: (event.start_ms, event.layer, event.source_basename)))],
         "composition_notes": [
