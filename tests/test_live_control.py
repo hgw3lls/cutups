@@ -121,6 +121,10 @@ class LiveControlTests(unittest.TestCase):
             section_fragment_multiplier=1.2,
             section_repeat_probability=0.23,
             section_ghost_probability=0.18,
+            baseline_placement_mode="gap",
+            baseline_placement_original_start_ms=375,
+            baseline_placement_cell_index=4,
+            baseline_placement_cell_energy=0.12,
         )
         baseline_path = str(REPO_ROOT / "baseline.wav")
         args = types.SimpleNamespace(
@@ -141,6 +145,8 @@ class LiveControlTests(unittest.TestCase):
             baseline_beat_duck_db=4.0,
             baseline_beat_duck_ms=90,
             baseline_beat_duck_windows=3,
+            baseline_placement="gap",
+            baseline_grid_summary={"active": True, "mode": "gap", "grid_ms": 125, "cell_count": 16, "captured": 2, "truncated": True, "cells": []},
             baseline_beat_source_duration_ms=4000,
             baseline_beat_inferred_bpm=120.0,
             sample_rate=44100,
@@ -166,8 +172,11 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["config"]["baseline_beat_duck_db"], 4.0)
         self.assertEqual(plan["config"]["baseline_beat_duck_ms"], 90)
         self.assertEqual(plan["config"]["baseline_beat_duck_windows"], 3)
+        self.assertEqual(plan["config"]["baseline_placement"], "gap")
         self.assertEqual(plan["config"]["baseline_beat_source_duration_ms"], 4000)
         self.assertEqual(plan["config"]["baseline_beat_inferred_bpm"], 120.0)
+        self.assertEqual(plan["baseline_grid"]["mode"], "gap")
+        self.assertEqual(plan["baseline_grid"]["cell_count"], 16)
         self.assertEqual(plan["config"]["source_manifest"], "")
         self.assertEqual(plan["config"]["source_manifest_matches"], 0)
         self.assertEqual(plan["events"][0]["source_manifest_role"], "spoken")
@@ -179,6 +188,8 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["events"][0]["planner"]["source_weight"]["use_count_before"], 2)
         self.assertTrue(plan["events"][0]["planner"]["source_weight"]["immediate_repeat"])
         self.assertEqual(plan["events"][0]["planner"]["section_targets"]["fragment_multiplier"], 1.2)
+        self.assertEqual(plan["events"][0]["planner"]["baseline_placement"]["mode"], "gap")
+        self.assertEqual(plan["events"][0]["planner"]["baseline_placement"]["cell_index"], 4)
         self.assertNotIn("source_final_weight", plan["events"][0])
         self.assertEqual(len(plan["section_windows"]), 5)
         self.assertEqual(len(plan["section_targets"]), 5)
@@ -246,6 +257,32 @@ class LiveControlTests(unittest.TestCase):
             recurrence_index=1,
         )
         self.assertEqual(cutup.baseline_duck_windows([first, second], total_ms=1000, duck_ms=50), [(50, 390)])
+
+    def test_apply_baseline_placement_biases_to_requested_cell_type(self) -> None:
+        profile = {
+            "active": True,
+            "mode": "accent",
+            "grid_ms": 100,
+            "cell_count": 5,
+            "energies": [0.1, 0.9, 0.2, 0.8, 0.0],
+            "low_threshold": 0.2,
+            "high_threshold": 0.8,
+        }
+        pos, info = cutup.apply_baseline_placement(250, 50, (0, 1000), 1000, 100, profile)
+        self.assertEqual(pos, 100)
+        self.assertEqual(info["cell_index"], 1)
+        self.assertEqual(info["cell_energy"], 0.9)
+
+        gap_profile = dict(profile, mode="gap")
+        pos, info = cutup.apply_baseline_placement(250, 50, (0, 1000), 1000, 100, gap_profile)
+        self.assertEqual(pos, 400)
+        self.assertEqual(info["cell_index"], 4)
+        self.assertEqual(info["cell_energy"], 0.0)
+
+        offbeat_profile = dict(profile, mode="offbeat", energies=[1.0, 0.1, 1.0], cell_count=3)
+        pos, info = cutup.apply_baseline_placement(100, 50, (0, 1000), 1000, 100, offbeat_profile)
+        self.assertEqual(pos, 100)
+        self.assertEqual(info["cell_index"], 1)
 
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:

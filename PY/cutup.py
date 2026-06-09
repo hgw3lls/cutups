@@ -89,6 +89,7 @@ SECTION_PROGRESS = {
 SECTION_ARCS = ("classic", "spoken", "breach", "pulse", "ghost")
 SECTION_PROFILE_KEYS = ("dens", "frag_mul", "repeat", "reverse", "filt", "silence", "ghost")
 SOURCE_SCORE_MODES = ("off", "spoken", "beat", "breach")
+BASELINE_PLACEMENT_MODES = ("any", "accent", "gap", "offbeat")
 SPOKEN_SOURCE_KEYWORDS = ("voice", "speech", "spoken", "phrase", "dialog", "dialogue", "interview", "reading", "narration")
 BEAT_SOURCE_KEYWORDS = ("beat", "loop", "drum", "kick", "snare", "hat", "bass", "perc", "pulse", "groove", "rhythm")
 BREACH_SOURCE_KEYWORDS = ("noise", "static", "radio", "scan", "dropout", "glitch", "burst", "carrier", "corrupt", "warning", "collapse")
@@ -183,6 +184,7 @@ ANALYSIS_CACHE_VERSION = 8
 AUDIO_PLAN_VERSION = 2
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
+BASELINE_GRID_SUMMARY_MAX_CELLS = 128
 ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
     "duration",
     "loudness",
@@ -453,6 +455,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
         "  --baseline-beat-bars 4 \\\n"
         "  --baseline-beat-gain -10 \\\n"
         "  --baseline-beat-duck-db 4 \\\n"
+        "  --baseline-placement gap \\\n"
         "  --slice-grid 1/16 \\\n"
         "  --stutter-rate 0.45 \\\n"
         "  --repeat-rate 0.30 \\\n"
@@ -634,6 +637,10 @@ class Event:
     section_fragment_multiplier: float = 0.0
     section_repeat_probability: float = 0.0
     section_ghost_probability: float = 0.0
+    baseline_placement_mode: str = "any"
+    baseline_placement_original_start_ms: int = 0
+    baseline_placement_cell_index: int = -1
+    baseline_placement_cell_energy: float = 0.0
 
 
 EVENT_CSV_FIELDS = [
@@ -649,7 +656,9 @@ EVENT_CSV_FIELDS = [
     "source_use_count_before", "source_recent_hits_before",
     "source_immediate_repeat", "section_density_target",
     "section_fragment_multiplier", "section_repeat_probability",
-    "section_ghost_probability",
+    "section_ghost_probability", "baseline_placement_mode",
+    "baseline_placement_original_start_ms", "baseline_placement_cell_index",
+    "baseline_placement_cell_energy",
 ]
 
 
@@ -865,6 +874,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--baseline-beat-bars", type=float, default=0.0, help="If >0 and --bpm is unset, infer BPM from the baseline beat length as this many 4/4 bars.")
     p.add_argument("--baseline-beat-duck-db", type=float, default=0.0, help="Positive dB attenuation applied to the baseline beat around cutup events; 0 disables.")
     p.add_argument("--baseline-beat-duck-ms", type=int, default=80, help="Padding in milliseconds around cutup events for baseline beat ducking.")
+    p.add_argument("--baseline-placement", choices=BASELINE_PLACEMENT_MODES, default="any", help="Bias grid placement against the baseline beat: any keeps current behavior, accent favors loud cells, gap favors quiet cells, offbeat favors quiet cells next to accents.")
     p.add_argument("--min-frag", type=float, default=0.05, help="Minimum fragment size in seconds.")
     p.add_argument("--max-frag", type=float, default=4.2, help="Maximum fragment size in seconds.")
     p.add_argument("--phrase-length", choices=sorted(PHRASE_LENGTH_RANGES), default="auto", help="Voice-oriented fragment length profile.")
@@ -1104,6 +1114,13 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     baseline_can_supply_bpm = bool(args.baseline_beat and args.baseline_beat_bars > 0)
     if args.bpm <= 0 and args.slice_grid != "off" and "slice_grid" in getattr(args, "_explicit_args", set()) and not baseline_can_supply_bpm:
         raise SystemExit("--slice-grid requires --bpm")
+    if args.baseline_placement != "any":
+        if not args.baseline_beat:
+            raise SystemExit("--baseline-placement requires --baseline-beat")
+        if args.bpm <= 0 and not baseline_can_supply_bpm:
+            raise SystemExit("--baseline-placement requires --bpm or --baseline-beat-bars")
+        if args.slice_grid == "off" and ("slice_grid" in getattr(args, "_explicit_args", set()) or args.bpm > 0):
+            raise SystemExit("--baseline-placement requires an active --slice-grid")
     if not 0.0 <= args.source_diversity <= 1.0:
         raise SystemExit("--source-diversity must be 0..1")
     if not 0.0 <= args.beat_similarity_weight <= 1.0:
@@ -1906,6 +1923,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
             print(f"baseline_beat_ducking: {args.baseline_beat_duck_db:.2f} dB over {args.baseline_beat_duck_ms} ms")
         else:
             print("baseline_beat_ducking: off")
+        print(f"baseline_placement: {args.baseline_placement}")
         if args.baseline_beat_bars > 0 and args.bpm <= 0:
             print(f"baseline_beat_bpm: infer during render from {args.baseline_beat_bars:g} bar(s)")
         elif args.baseline_beat_bars > 0:
@@ -1914,6 +1932,7 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
             print("baseline_beat_bpm: off")
     else:
         print("baseline_beat: off")
+        print("baseline_placement: any")
     print(f"fragments: {args.min_frag:.3f}s..{args.max_frag:.3f}s")
     print(f"phrase_length: {args.phrase_length}")
     print(f"intelligibility: {args.intelligibility}")
@@ -3674,6 +3693,149 @@ def duck_baseline_beat_bed(bed: AudioSegment, events: List[Event], duck_db: floa
     return out[: len(bed)], len(windows)
 
 
+def baseline_placement_mode(args: argparse.Namespace) -> str:
+    mode = str(getattr(args, "baseline_placement", "any") or "any").lower()
+    return mode if mode in BASELINE_PLACEMENT_MODES else "any"
+
+
+def baseline_cell_rank(energy: float, low_threshold: float, high_threshold: float) -> str:
+    if energy >= high_threshold:
+        return "accent"
+    if energy <= low_threshold:
+        return "gap"
+    return "mid"
+
+
+def baseline_grid_profile(audio: Optional[AudioSegment], args: argparse.Namespace, total_ms: int) -> Dict[str, object]:
+    mode = baseline_placement_mode(args)
+    grid_ms = beat_grid_ms(args)
+    inactive = {
+        "active": False,
+        "mode": mode,
+        "grid_ms": grid_ms,
+        "cell_count": 0,
+        "energies": [],
+        "summary": {"active": False, "mode": mode, "grid_ms": grid_ms, "cell_count": 0, "captured": 0, "truncated": False, "cells": []},
+    }
+    if mode == "any" or audio is None or grid_ms <= 0 or total_ms <= 0:
+        return inactive
+
+    cell_count = int(math.ceil(total_ms / float(grid_ms)))
+    if cell_count <= 0:
+        return inactive
+    rms_values: List[int] = []
+    for idx in range(cell_count):
+        start_ms = idx * grid_ms
+        end_ms = min(len(audio), start_ms + grid_ms)
+        if end_ms <= start_ms:
+            rms_values.append(0)
+        else:
+            rms_values.append(int(audio[start_ms:end_ms].rms))
+    max_rms = max(rms_values) if rms_values else 0
+    energies = [round((rms / max_rms) if max_rms > 0 else 0.0, 6) for rms in rms_values]
+    ordered = sorted(energies)
+    if ordered:
+        low_threshold = ordered[min(len(ordered) - 1, max(0, int(len(ordered) * 0.33)))]
+        high_threshold = ordered[min(len(ordered) - 1, max(0, int(len(ordered) * 0.67)))]
+    else:
+        low_threshold = 0.0
+        high_threshold = 0.0
+    mean_energy, energy_variation = mean_and_variation(energies)
+    capture_count = min(cell_count, BASELINE_GRID_SUMMARY_MAX_CELLS)
+    cells = [
+        {
+            "index": idx,
+            "start_ms": idx * grid_ms,
+            "end_ms": min(total_ms, (idx + 1) * grid_ms),
+            "rms": rms_values[idx],
+            "energy": energies[idx],
+            "rank": baseline_cell_rank(energies[idx], low_threshold, high_threshold),
+        }
+        for idx in range(capture_count)
+    ]
+    summary = {
+        "active": True,
+        "mode": mode,
+        "grid_ms": grid_ms,
+        "cell_count": cell_count,
+        "captured": len(cells),
+        "truncated": cell_count > len(cells),
+        "mean_energy": mean_energy,
+        "energy_variation": energy_variation,
+        "low_threshold": round(float(low_threshold), 6),
+        "high_threshold": round(float(high_threshold), 6),
+        "accent_cells": sum(1 for energy in energies if energy >= high_threshold),
+        "gap_cells": sum(1 for energy in energies if energy <= low_threshold),
+        "cells": cells,
+    }
+    return {
+        "active": True,
+        "mode": mode,
+        "grid_ms": grid_ms,
+        "cell_count": cell_count,
+        "energies": energies,
+        "low_threshold": float(low_threshold),
+        "high_threshold": float(high_threshold),
+        "summary": summary,
+    }
+
+
+def baseline_placement_score(mode: str, idx: int, energies: Sequence[float], low_threshold: float, high_threshold: float) -> float:
+    energy = float(energies[idx])
+    if mode == "accent":
+        return energy
+    if mode == "gap":
+        return 1.0 - energy
+    if mode == "offbeat":
+        prev_energy = float(energies[idx - 1]) if idx > 0 else 0.0
+        next_energy = float(energies[idx + 1]) if idx + 1 < len(energies) else 0.0
+        neighbor_accent = max(prev_energy, next_energy)
+        return (1.0 - energy) * 0.7 + neighbor_accent * 0.3
+    return 0.0
+
+
+def apply_baseline_placement(
+    pos_ms: int,
+    event_len_ms: int,
+    sec_span: Tuple[int, int],
+    total_ms: int,
+    grid_ms: int,
+    profile: Dict[str, object],
+) -> Tuple[int, Dict[str, object]]:
+    mode = str(profile.get("mode", "any") or "any")
+    energies = profile.get("energies", [])
+    if mode == "any" or not profile.get("active") or grid_ms <= 0 or not isinstance(energies, list):
+        return pos_ms, {"mode": "any", "original_start_ms": pos_ms, "cell_index": -1, "cell_energy": 0.0}
+    if not energies:
+        return pos_ms, {"mode": mode, "original_start_ms": pos_ms, "cell_index": -1, "cell_energy": 0.0}
+
+    current_idx = int(clamp(round(pos_ms / float(grid_ms)), 0, len(energies) - 1))
+    radius = max(2, min(16, int(max(4, round(750 / float(grid_ms))))))
+    low_threshold = float(profile.get("low_threshold", 0.0) or 0.0)
+    high_threshold = float(profile.get("high_threshold", 0.0) or 0.0)
+    best: Optional[Tuple[float, int, int, float]] = None
+    for idx in range(max(0, current_idx - radius), min(len(energies), current_idx + radius + 1)):
+        candidate = clamp_to_section(idx * grid_ms, sec_span, event_len_ms, grid_ms=grid_ms)
+        candidate_idx = int(clamp(round(candidate / float(grid_ms)), 0, len(energies) - 1))
+        energy = float(energies[candidate_idx])
+        distance = abs(candidate_idx - current_idx)
+        score = baseline_placement_score(mode, candidate_idx, energies, low_threshold, high_threshold) - (distance * 0.025)
+        item = (score, -distance, candidate_idx, energy)
+        if best is None or item > best:
+            best = item
+
+    if best is None:
+        return pos_ms, {"mode": mode, "original_start_ms": pos_ms, "cell_index": -1, "cell_energy": 0.0}
+    _, _, cell_idx, cell_energy = best
+    adjusted = clamp_to_section(cell_idx * grid_ms, sec_span, event_len_ms, grid_ms=grid_ms)
+    return adjusted, {
+        "mode": mode,
+        "original_start_ms": int(pos_ms),
+        "cell_index": int(cell_idx),
+        "cell_energy": round(float(cell_energy), 6),
+    }
+
+
 def change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
     if abs(speed - 1.0) < 1e-6:
         return audio
@@ -4023,6 +4185,12 @@ def event_plan_row(event: Event, index: int) -> Dict[str, object]:
             "repeat_probability": row.pop("section_repeat_probability", 0.0),
             "ghost_probability": row.pop("section_ghost_probability", 0.0),
         },
+        "baseline_placement": {
+            "mode": row.pop("baseline_placement_mode", "any"),
+            "original_start_ms": row.pop("baseline_placement_original_start_ms", 0),
+            "cell_index": row.pop("baseline_placement_cell_index", -1),
+            "cell_energy": row.pop("baseline_placement_cell_energy", 0.0),
+        },
     }
     row["event_index"] = index
     row["start_sec"] = round(event.start_ms / 1000.0, 3)
@@ -4100,6 +4268,7 @@ def build_audio_plan(
             "baseline_beat_duck_db": float(getattr(args, "baseline_beat_duck_db", 0.0)),
             "baseline_beat_duck_ms": int(getattr(args, "baseline_beat_duck_ms", 80)),
             "baseline_beat_duck_windows": int(getattr(args, "baseline_beat_duck_windows", 0) or 0),
+            "baseline_placement": baseline_placement_mode(args),
             "baseline_beat_source_duration_ms": int(getattr(args, "baseline_beat_source_duration_ms", 0) or 0),
             "baseline_beat_inferred_bpm": float(getattr(args, "baseline_beat_inferred_bpm", 0.0) or 0.0),
             "sample_rate": int(args.sample_rate),
@@ -4125,6 +4294,7 @@ def build_audio_plan(
         },
         "section_windows": section_window_rows(total_ms),
         "section_targets": section_target_rows(args, total_ms),
+        "baseline_grid": getattr(args, "baseline_grid_summary", {}),
         "sections": section_summary_rows(events, total_ms),
         "events": [event_plan_row(event, index) for index, event in enumerate(sorted(events, key=lambda event: (event.start_ms, event.layer, event.source_basename)))],
         "composition_notes": [
@@ -4180,7 +4350,16 @@ def build_section_score(events: List[Event]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namespace, min_frag_ms: int, max_frag_ms: int, live: Optional[LiveControlState] = None, beat_jump: Optional[BeatJumpState] = None) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
+def place_events(
+    samples: List[SampleFile],
+    total_ms: int,
+    args: argparse.Namespace,
+    min_frag_ms: int,
+    max_frag_ms: int,
+    live: Optional[LiveControlState] = None,
+    beat_jump: Optional[BeatJumpState] = None,
+    baseline_grid: Optional[Dict[str, object]] = None,
+) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     ghosts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -4314,6 +4493,9 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
         if grid_ms > 0:
             pos = quantize_to_grid(pos, grid_ms)
         pos = clamp_to_section(pos, sec_span, len(shaped), grid_ms=grid_ms)
+        placement_info = {"mode": "any", "original_start_ms": pos, "cell_index": -1, "cell_energy": 0.0}
+        if baseline_grid:
+            pos, placement_info = apply_baseline_placement(pos, len(shaped), sec_span, total_ms, grid_ms, baseline_grid)
         current_anchor = min(total_ms - 50, pos + step)
 
         if runtime.panic_silence and random.random() < 0.55:
@@ -4407,6 +4589,10 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 transformation=str(meta["transformation"]),
                 layer_role="foreground" if layer == "voice_main" else "rhythmic" if layer == "voice_cuts" else "ghost",
                 recurrence_index=rec_idx,
+                baseline_placement_mode=str(placement_info.get("mode", "any")),
+                baseline_placement_original_start_ms=int(placement_info.get("original_start_ms", pos)),
+                baseline_placement_cell_index=int(placement_info.get("cell_index", -1)),
+                baseline_placement_cell_energy=float(placement_info.get("cell_energy", 0.0)),
                 **selection_debug,
             )
         )
@@ -4436,6 +4622,9 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 source_diversity=local_args.source_diversity,
                 section_arc=section_arc_name(local_args),
                 source_score=source_score_mode(local_args),
+                baseline_placement=str(placement_info.get("mode", "any")),
+                baseline_cell_index=int(placement_info.get("cell_index", -1)),
+                baseline_cell_energy=float(placement_info.get("cell_energy", 0.0)),
             )
 
     return voice_main, voice_cuts, ghosts, events
@@ -4464,9 +4653,20 @@ def build_variant(
     stems_dir = variant_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
-    main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms, live=live, beat_jump=beat_jump)
-    hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
     baseline_bed = render_baseline_beat_bed(baseline_beat, total_ms) if baseline_beat else None
+    baseline_profile = baseline_grid_profile(baseline_bed, args, total_ms)
+    setattr(args, "baseline_grid_summary", baseline_profile.get("summary", {}))
+    main, cuts, ghosts, events = place_events(
+        samples,
+        total_ms,
+        args,
+        min_frag_ms,
+        max_frag_ms,
+        live=live,
+        beat_jump=beat_jump,
+        baseline_grid=baseline_profile,
+    )
+    hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
     baseline_duck_count = 0
     if baseline_bed is not None:
         baseline_bed, baseline_duck_count = duck_baseline_beat_bed(

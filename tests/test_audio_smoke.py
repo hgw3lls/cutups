@@ -128,6 +128,8 @@ class AudioSmokeTests(unittest.TestCase):
                     "4",
                     "--baseline-beat-duck-ms",
                     "75",
+                    "--baseline-placement",
+                    "gap",
                     "--slice-grid",
                     "1/16",
                     "--beat-jump-mode",
@@ -188,6 +190,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertIn("selection_reason", rows[0])
             self.assertIn("source_final_weight", rows[0])
             self.assertIn("section_density_target", rows[0])
+            self.assertIn("baseline_placement_mode", rows[0])
+            self.assertIn("baseline_placement_cell_index", rows[0])
             self.assertEqual(rows[0]["source_manifest_role"], "beat")
             self.assertEqual(rows[0]["source_manifest_weight"], "1.4")
             event_sources = {row["source_basename"] for row in rows}
@@ -210,10 +214,17 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["config"]["baseline_beat_duck_db"], 4.0)
             self.assertEqual(render_plan["config"]["baseline_beat_duck_ms"], 75)
             self.assertGreaterEqual(render_plan["config"]["baseline_beat_duck_windows"], 1)
+            self.assertEqual(render_plan["config"]["baseline_placement"], "gap")
             self.assertEqual(render_plan["config"]["baseline_beat_source_duration_ms"], 2000)
             self.assertEqual(render_plan["config"]["baseline_beat_inferred_bpm"], 120.0)
             self.assertEqual(render_plan["config"]["bpm"], 120.0)
             self.assertEqual(render_plan["config"]["beat_grid_ms"], 125)
+            self.assertTrue(render_plan["baseline_grid"]["active"])
+            self.assertEqual(render_plan["baseline_grid"]["mode"], "gap")
+            self.assertEqual(render_plan["baseline_grid"]["grid_ms"], 125)
+            self.assertEqual(render_plan["baseline_grid"]["cell_count"], 24)
+            self.assertGreaterEqual(render_plan["baseline_grid"]["accent_cells"], 1)
+            self.assertIn("baseline_placement", render_plan["events"][0]["planner"])
             self.assertEqual(render_plan["config"]["section_arc"], "pulse")
             self.assertEqual(render_plan["config"]["source_score"], "beat")
             self.assertEqual(render_plan["config"]["source_diversity"], 0.35)
