@@ -600,6 +600,16 @@ class LiveControlTests(unittest.TestCase):
             audio_path.write_bytes(b"not real wav but good enough for suffix discovery")
             self.assertEqual(cutup.candidate_audio_paths(audio_path), [audio_path])
 
+    def test_candidate_audio_paths_excludes_baseline_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            voice = root / "voice.wav"
+            baseline = root / "baseline.wav"
+            voice.write_bytes(b"suffix only")
+            baseline.write_bytes(b"suffix only")
+            self.assertEqual(cutup.candidate_audio_paths(root, exclude_paths=[baseline]), [voice])
+            self.assertEqual(cutup.candidate_audio_paths(baseline, exclude_paths=[baseline]), [])
+
     def test_resolve_output_root_avoids_nonempty_folder(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "render"

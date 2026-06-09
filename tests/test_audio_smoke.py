@@ -115,7 +115,7 @@ class AudioSmokeTests(unittest.TestCase):
                     "--preset",
                     "beat-cutup",
                     "--input",
-                    str(source),
+                    str(root),
                     "--source-manifest",
                     str(manifest),
                     "--baseline-beat",
@@ -190,6 +190,9 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertIn("section_density_target", rows[0])
             self.assertEqual(rows[0]["source_manifest_role"], "beat")
             self.assertEqual(rows[0]["source_manifest_weight"], "1.4")
+            event_sources = {row["source_basename"] for row in rows}
+            self.assertIn(source.name, event_sources)
+            self.assertNotIn(baseline.name, event_sources)
             transforms = " ".join(row["transformation"] for row in rows)
             for tag in ("+grid", "+beatstutter", "+beatmute", "+beatrepeat", "+beatdrop"):
                 self.assertIn(tag, transforms)

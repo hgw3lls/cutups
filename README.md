@@ -137,7 +137,7 @@ Use a dedicated beat loop as a timing bed when the cutup source material should 
 python3 PY/cutup.py --mode audio --preset beat-cutup --input ./voice_or_noise --baseline-beat ./beats/drum_loop.wav --baseline-beat-bars 4 --baseline-beat-gain -10 --baseline-beat-duck-db 4 --slice-grid 1/16 --stutter-rate 0.45 --repeat-rate 0.3 --output out/beat_baseline
 ```
 
-`--baseline-beat` is looped under the master and exported as `stems/baseline_beat.wav`; it is not added to the random source pool. If `--baseline-beat-bars` is set and `--bpm` is omitted, cutups infers the grid BPM from the beat-loop duration assuming 4/4 bars. Use `--baseline-beat-duck-db` and `--baseline-beat-duck-ms` to attenuate the beat around cutup events so spoken/noise fragments cut through the groove. Set `--bpm` manually when the loop has pickup silence, odd meter, or a non-looping arrangement.
+`--baseline-beat` is looped under the master and exported as `stems/baseline_beat.wav`; it is excluded from the random source pool even when the file also lives inside `--input`. If `--baseline-beat-bars` is set and `--bpm` is omitted, cutups infers the grid BPM from the beat-loop duration assuming 4/4 bars. Use `--baseline-beat-duck-db` and `--baseline-beat-duck-ms` to attenuate the beat around cutup events so spoken/noise fragments cut through the groove. Set `--bpm` manually when the loop has pickup silence, odd meter, or a non-looping arrangement.
 
 Write a lightweight JSON source analysis cache for later inspection or future beat-similarity work:
 

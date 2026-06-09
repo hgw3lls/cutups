@@ -1584,18 +1584,49 @@ def grid_fragment_length(audio_len: int, min_ms: int, max_ms: int, frag_mul: flo
     return max(8, min(audio_len, random.choice(candidates)))
 
 
-def candidate_audio_paths(root: Path) -> List[Path]:
+def resolved_excluded_paths(paths: Optional[Iterable[Path]] = None) -> Set[Path]:
+    excluded: Set[Path] = set()
+    for path in paths or []:
+        try:
+            excluded.add(Path(path).expanduser().resolve())
+        except OSError:
+            continue
+    return excluded
+
+
+def path_is_excluded(path: Path, excluded: Set[Path]) -> bool:
+    if not excluded:
+        return False
+    try:
+        return path.expanduser().resolve() in excluded
+    except OSError:
+        return False
+
+
+def candidate_audio_paths(root: Path, exclude_paths: Optional[Iterable[Path]] = None) -> List[Path]:
+    excluded = resolved_excluded_paths(exclude_paths)
     if root.is_file():
-        return [root] if root.suffix.lower() in AUDIO_EXTS else []
+        return [root] if root.suffix.lower() in AUDIO_EXTS and not path_is_excluded(root, excluded) else []
     if root.is_dir():
-        return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTS)
+        return sorted(
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in AUDIO_EXTS and not path_is_excluded(path, excluded)
+        )
     return []
 
 
-def resolve_cue_audio_path(raw_file: str, input_root: Path, cue_file: Path, default_audio: Optional[Path]) -> Optional[Path]:
+def resolve_cue_audio_path(
+    raw_file: str,
+    input_root: Path,
+    cue_file: Path,
+    default_audio: Optional[Path],
+    exclude_paths: Optional[Iterable[Path]] = None,
+) -> Optional[Path]:
+    excluded = resolved_excluded_paths(exclude_paths)
     text = str(raw_file or "").strip()
     if not text:
-        return default_audio
+        return None if default_audio is not None and path_is_excluded(default_audio, excluded) else default_audio
     raw_path = Path(text).expanduser()
     candidates: List[Path] = []
     if raw_path.is_absolute():
@@ -1607,7 +1638,7 @@ def resolve_cue_audio_path(raw_file: str, input_root: Path, cue_file: Path, defa
             candidates.append(input_root.parent / raw_path)
         candidates.append(cue_file.parent / raw_path)
     for candidate in candidates:
-        if candidate.exists() and candidate.suffix.lower() in AUDIO_EXTS:
+        if candidate.exists() and candidate.suffix.lower() in AUDIO_EXTS and not path_is_excluded(candidate, excluded):
             return candidate.resolve()
     return None
 
@@ -1920,7 +1951,8 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     if args.mode in {"audio", "both", "all"}:
         if args.input:
             input_path = Path(args.input).expanduser().resolve()
-            candidates = candidate_audio_paths(input_path)
+            baseline_path = baseline_beat_path(args)
+            candidates = candidate_audio_paths(input_path, exclude_paths=[baseline_path] if baseline_path else None)
             print(f"input: {input_path}")
             print(f"audio candidates: {len(candidates)}")
             print(f"cue_file: {Path(args.cue_file).expanduser().resolve() if args.cue_file else 'none'}")
@@ -2689,11 +2721,11 @@ def run_cuttargets_mode(args: argparse.Namespace, output_root: Path, summary: Ru
 # -------------------------------------------------------------------
 
 
-def discover_samples(root: Path) -> Tuple[List[SampleFile], int]:
+def discover_samples(root: Path, exclude_paths: Optional[Iterable[Path]] = None) -> Tuple[List[SampleFile], int]:
     ensure_audio_backend()
     samples: List[SampleFile] = []
     unreadable = 0
-    for path in candidate_audio_paths(root):
+    for path in candidate_audio_paths(root, exclude_paths=exclude_paths):
         try:
             audio = AudioSegment.from_file(path)
         except Exception:
@@ -2710,15 +2742,16 @@ def discover_samples(root: Path) -> Tuple[List[SampleFile], int]:
     return samples, unreadable
 
 
-def discover_cue_samples(input_root: Path, cue_file: Path) -> Tuple[List[SampleFile], int]:
+def discover_cue_samples(input_root: Path, cue_file: Path, exclude_paths: Optional[Iterable[Path]] = None) -> Tuple[List[SampleFile], int]:
     ensure_audio_backend()
     if not cue_file.exists():
         raise SystemExit(f"Cue file not found: {cue_file}")
     if not cue_file.is_file():
         raise SystemExit(f"--cue-file must point to an .srt or .csv file: {cue_file}")
 
-    default_audio: Optional[Path] = input_root if input_root.is_file() and input_root.suffix.lower() in AUDIO_EXTS else None
-    audio_candidates = candidate_audio_paths(input_root)
+    excluded = resolved_excluded_paths(exclude_paths)
+    default_audio: Optional[Path] = input_root if input_root.is_file() and input_root.suffix.lower() in AUDIO_EXTS and not path_is_excluded(input_root, excluded) else None
+    audio_candidates = candidate_audio_paths(input_root, exclude_paths=exclude_paths)
     if default_audio is None and len(audio_candidates) == 1:
         default_audio = audio_candidates[0]
 
@@ -2726,7 +2759,7 @@ def discover_cue_samples(input_root: Path, cue_file: Path) -> Tuple[List[SampleF
     samples: List[SampleFile] = []
     skipped = 0
     for row in load_cue_rows(cue_file):
-        audio_path = resolve_cue_audio_path(str(row.get("file", "")), input_root, cue_file, default_audio)
+        audio_path = resolve_cue_audio_path(str(row.get("file", "")), input_root, cue_file, default_audio, exclude_paths=exclude_paths)
         if audio_path is None:
             skipped += 1
             continue
@@ -4490,12 +4523,13 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
         raise SystemExit(f"--input must be an audio file or directory: {input_root}")
 
     baseline_beat = load_baseline_beat(args)
+    baseline_exclusions = [baseline_beat.path] if baseline_beat else None
 
     if args.cue_file:
         cue_path = Path(args.cue_file).expanduser().resolve()
-        samples, unreadable = discover_cue_samples(input_root, cue_path)
+        samples, unreadable = discover_cue_samples(input_root, cue_path, exclude_paths=baseline_exclusions)
     else:
-        samples, unreadable = discover_samples(input_root)
+        samples, unreadable = discover_samples(input_root, exclude_paths=baseline_exclusions)
 
     args.source_manifest_matches = 0
     if args.source_manifest:
@@ -4506,6 +4540,8 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
 
     if not samples:
         hint = f" ({unreadable} files could not be decoded)" if unreadable else ""
+        if baseline_beat:
+            hint += " after excluding --baseline-beat"
         if args.cue_file:
             raise SystemExit(f"No usable audio cue samples found from {Path(args.cue_file).expanduser().resolve()}{hint}")
         raise SystemExit(f"No usable audio samples found in {input_root}{hint}")

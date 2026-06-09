@@ -208,7 +208,7 @@ python3 PY/cutup.py \
   --seed 29
 ```
 
-`--baseline-beat` is looped under the master, exported as `stems/baseline_beat.wav`, and excluded from source selection. `--baseline-beat-bars` infers BPM only when `--bpm` is omitted; set `--bpm` manually for odd meters, pickups, or non-looping beat files. Add `--baseline-beat-duck-db` and `--baseline-beat-duck-ms` when voice, noise, or stutter fragments need to push through the beat without burying the groove.
+`--baseline-beat` is looped under the master, exported as `stems/baseline_beat.wav`, and excluded from source selection even if it is also inside `--input`. `--baseline-beat-bars` infers BPM only when `--bpm` is omitted; set `--bpm` manually for odd meters, pickups, or non-looping beat files. Add `--baseline-beat-duck-db` and `--baseline-beat-duck-ms` when voice, noise, or stutter fragments need to push through the beat without burying the groove.
 
 Add `--analysis-cache auto` to write `audio_analysis_cache.json` under the output folder. It captures source/cue identity, duration, RMS/loudness, zero-crossing rate, channels, sample rate, beat-grid context, capped grid-cell summaries, and normalized similarity vectors for inspection and future similarity planning.
 
