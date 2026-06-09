@@ -175,6 +175,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
     "mute_rate": (0.0, 1.0),
     "repeat_rate": (0.0, 1.0),
     "beat_dropout_rate": (0.0, 1.0),
+    "source_diversity": (0.0, 1.0),
 }
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
@@ -695,6 +696,9 @@ class RuntimeParams:
     mute_rate: float = 0.0
     repeat_rate: float = 0.0
     beat_dropout_rate: float = 0.0
+    source_diversity: float = 0.0
+    section_arc: str = ""
+    source_score: str = ""
     force_section: str = ""
     hold_section: bool = False
     burst_now: bool = False
@@ -712,6 +716,8 @@ class LiveControlState:
     overrides: Dict[str, float] = field(default_factory=dict)
     section_override: str = ""
     filter_severity_override: str = ""
+    section_arc_override: str = ""
+    source_score_override: str = ""
     hold_section: bool = False
     burst_now: bool = False
     panic_silence: bool = False
@@ -757,6 +763,12 @@ class LiveControlState:
                 self.filter_severity_override = ""
             elif filter_severity in {"light", "medium", "hard"}:
                 self.filter_severity_override = filter_severity
+        if "section_arc" in controls:
+            section_arc = str(controls.get("section_arc", "")).strip().lower()
+            self.section_arc_override = section_arc if section_arc in SECTION_ARCS else ""
+        if "source_score" in controls:
+            source_score = str(controls.get("source_score", "")).strip().lower()
+            self.source_score_override = source_score if source_score in SOURCE_SCORE_MODES else ""
         self.hold_section = bool(controls.get("hold_section", False))
         self.burst_now = bool(controls.get("burst_now", False))
         self.panic_silence = bool(controls.get("panic_silence", False))
@@ -776,6 +788,10 @@ class LiveControlState:
         }
         if self.filter_severity_override:
             row["filter_severity"] = self.filter_severity_override
+        if self.section_arc_override:
+            row["section_arc"] = self.section_arc_override
+        if self.source_score_override:
+            row["source_score"] = self.source_score_override
         row.update(fields)
         try:
             with self.telemetry_path.open("a", encoding="utf-8") as f:
@@ -1294,6 +1310,9 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
             mute_rate=values["mute_rate"],
             repeat_rate=values["repeat_rate"],
             beat_dropout_rate=values["beat_dropout_rate"],
+            source_diversity=values["source_diversity"],
+            section_arc=live.section_arc_override,
+            source_score=live.source_score_override,
             force_section=live.section_override,
             hold_section=live.hold_section,
             burst_now=live.burst_now,
@@ -1315,6 +1334,9 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
         mute_rate=float(getattr(args, "mute_rate", 0.0)),
         repeat_rate=float(getattr(args, "repeat_rate", 0.0)),
         beat_dropout_rate=float(getattr(args, "beat_dropout_rate", 0.0)),
+        source_diversity=float(getattr(args, "source_diversity", 0.0)),
+        section_arc="",
+        source_score="",
     )
 
 
@@ -1336,6 +1358,11 @@ def apply_runtime_params(args: argparse.Namespace, runtime: RuntimeParams) -> ar
     local_args.mute_rate = runtime.mute_rate
     local_args.repeat_rate = runtime.repeat_rate
     local_args.beat_dropout_rate = runtime.beat_dropout_rate
+    local_args.source_diversity = runtime.source_diversity
+    if runtime.section_arc:
+        local_args.section_arc = runtime.section_arc
+    if runtime.source_score:
+        local_args.source_score = runtime.source_score
     return local_args
 
 
@@ -4197,6 +4224,9 @@ def place_events(samples: List[SampleFile], total_ms: int, args: argparse.Namesp
                 mute_rate=local_args.mute_rate,
                 repeat_rate=local_args.repeat_rate,
                 beat_dropout_rate=local_args.beat_dropout_rate,
+                source_diversity=local_args.source_diversity,
+                section_arc=section_arc_name(local_args),
+                source_score=source_score_mode(local_args),
             )
 
     return voice_main, voice_cuts, ghosts, events

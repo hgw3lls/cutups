@@ -35,7 +35,11 @@ ALLOWED: Dict[str, Tuple[float, float]] = {
     "mute_rate": (0.0, 1.0),
     "repeat_rate": (0.0, 1.0),
     "beat_dropout_rate": (0.0, 1.0),
+    "source_diversity": (0.0, 1.0),
 }
+
+SECTION_ARCS = {"", "classic", "spoken", "breach", "pulse", "ghost"}
+SOURCE_SCORES = {"", "off", "spoken", "beat", "breach"}
 
 
 def clamp(v: float, low: float, high: float) -> float:
@@ -60,6 +64,14 @@ def extract_conductor_controls(raw: Dict[str, object]) -> Dict[str, object]:
         filter_severity = str(raw.get("filter_severity", "")).strip().lower()
         if filter_severity in {"", "auto", "light", "medium", "hard"}:
             out["filter_severity"] = filter_severity
+    if "section_arc" in raw:
+        section_arc = str(raw.get("section_arc", "")).strip().lower()
+        if section_arc in SECTION_ARCS:
+            out["section_arc"] = section_arc
+    if "source_score" in raw:
+        source_score = str(raw.get("source_score", "")).strip().lower()
+        if source_score in SOURCE_SCORES:
+            out["source_score"] = source_score
     for key in ("hold_section", "burst_now", "panic_silence"):
         if key in raw:
             out[key] = bool(raw.get(key))

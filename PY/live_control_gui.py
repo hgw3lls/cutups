@@ -50,7 +50,11 @@ RANGES: Dict[str, Tuple[float, float, float]] = {
     "mute_rate": (0.0, 1.0, 0.0),
     "repeat_rate": (0.0, 1.0, 0.0),
     "beat_dropout_rate": (0.0, 1.0, 0.0),
+    "source_diversity": (0.0, 1.0, 0.0),
 }
+
+SECTION_ARCS = ["classic", "spoken", "breach", "pulse", "ghost"]
+SOURCE_SCORES = ["off", "spoken", "beat", "breach"]
 
 PRESETS: Dict[str, Dict[str, object]] = {
     "Default": {k: v[2] for k, v in RANGES.items()},
@@ -66,6 +70,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "dropout_rate": 0.64,
         "reverse_shard_rate": 0.46,
         "filter_severity": "hard",
+        "section_arc": "breach",
+        "source_score": "breach",
+        "source_diversity": 0.22,
     },
     "spoken-word-cutup": {
         "absurd_seriousness": 0.62,
@@ -75,6 +82,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "recurrence_prob": 0.32,
         "ghost_prob": 0.18,
         "silence_prob": 0.18,
+        "section_arc": "spoken",
+        "source_score": "spoken",
+        "source_diversity": 0.65,
     },
     "beat-cutup": {
         "absurd_seriousness": 0.62,
@@ -88,6 +98,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "mute_rate": 0.18,
         "repeat_rate": 0.38,
         "beat_dropout_rate": 0.16,
+        "section_arc": "pulse",
+        "source_score": "beat",
+        "source_diversity": 0.35,
     },
     "radio-intrusion": {
         "absurd_seriousness": 0.72,
@@ -100,6 +113,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "burst_rate": 0.24,
         "dropout_rate": 0.28,
         "filter_severity": "hard",
+        "section_arc": "ghost",
+        "source_score": "breach",
+        "source_diversity": 0.45,
     },
     "hard-stutter": {
         "absurd_seriousness": 0.74,
@@ -115,6 +131,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "mute_rate": 0.26,
         "repeat_rate": 0.52,
         "beat_dropout_rate": 0.24,
+        "section_arc": "pulse",
+        "source_score": "beat",
+        "source_diversity": 0.25,
     },
     "ghost-transmission": {
         "absurd_seriousness": 0.66,
@@ -124,6 +143,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "recurrence_prob": 0.74,
         "ghost_prob": 0.82,
         "silence_prob": 0.38,
+        "section_arc": "ghost",
+        "source_score": "spoken",
+        "source_diversity": 0.18,
     },
     "Bureaucratic Pressure": {
         "absurd_seriousness": 0.92,
@@ -142,6 +164,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "recurrence_prob": 0.70,
         "ghost_prob": 0.75,
         "silence_prob": 0.34,
+        "section_arc": "ghost",
+        "source_score": "spoken",
+        "source_diversity": 0.25,
     },
     "Collapse Ritual": {
         "absurd_seriousness": 1.00,
@@ -151,6 +176,9 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "recurrence_prob": 0.66,
         "ghost_prob": 0.56,
         "silence_prob": 0.41,
+        "section_arc": "breach",
+        "source_score": "breach",
+        "source_diversity": 0.3,
     },
 }
 
@@ -164,6 +192,8 @@ class ControlGUI:
     last_payload: Dict[str, object]
     section_var: tk.StringVar
     filter_var: tk.StringVar
+    arc_var: tk.StringVar
+    score_var: tk.StringVar
     hold_var: tk.BooleanVar
     burst_var: tk.BooleanVar
     panic_var: tk.BooleanVar
@@ -179,6 +209,8 @@ class ControlGUI:
         controls = dict(payload)
         controls["force_section"] = self.section_var.get().strip().upper()
         controls["filter_severity"] = self.filter_var.get().strip().lower()
+        controls["section_arc"] = self.arc_var.get().strip().lower()
+        controls["source_score"] = self.score_var.get().strip().lower()
         controls["hold_section"] = bool(self.hold_var.get())
         controls["burst_now"] = bool(self.burst_var.get())
         controls["panic_silence"] = bool(self.panic_var.get())
@@ -195,6 +227,8 @@ class ControlGUI:
         for key, var in self.vars.items():
             var.set(float(data.get(key, RANGES[key][2])))
         self.filter_var.set(str(data.get("filter_severity", "auto")))
+        self.arc_var.set(str(data.get("section_arc", "classic")))
+        self.score_var.set(str(data.get("source_score", "off")))
         self.write_payload()
 
     def reset_defaults(self) -> None:
@@ -215,7 +249,7 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("700x760")
+    root.geometry("700x820")
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill=tk.BOTH, expand=True)
@@ -238,6 +272,8 @@ def main() -> None:
     vars_map: Dict[str, tk.DoubleVar] = {k: tk.DoubleVar(value=default) for k, (_, _, default) in RANGES.items()}
     section_var = tk.StringVar(value="")
     filter_var = tk.StringVar(value="auto")
+    arc_var = tk.StringVar(value="classic")
+    score_var = tk.StringVar(value="off")
     hold_var = tk.BooleanVar(value=False)
     burst_var = tk.BooleanVar(value=False)
     panic_var = tk.BooleanVar(value=False)
@@ -249,6 +285,8 @@ def main() -> None:
         last_payload={},
         section_var=section_var,
         filter_var=filter_var,
+        arc_var=arc_var,
+        score_var=score_var,
         hold_var=hold_var,
         burst_var=burst_var,
         panic_var=panic_var,
@@ -280,6 +318,17 @@ def main() -> None:
     filter_combo = ttk.Combobox(filter_row, values=["auto", "light", "medium", "hard"], textvariable=filter_var, state="readonly", width=14)
     filter_combo.pack(side=tk.LEFT, padx=(8, 10))
     filter_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
+
+    planner_row = ttk.Frame(frame)
+    planner_row.pack(fill=tk.X, pady=(4, 4))
+    ttk.Label(planner_row, text="section_arc", width=22).pack(side=tk.LEFT)
+    arc_combo = ttk.Combobox(planner_row, values=SECTION_ARCS, textvariable=arc_var, state="readonly", width=14)
+    arc_combo.pack(side=tk.LEFT, padx=(8, 16))
+    ttk.Label(planner_row, text="source_score").pack(side=tk.LEFT)
+    score_combo = ttk.Combobox(planner_row, values=SOURCE_SCORES, textvariable=score_var, state="readonly", width=12)
+    score_combo.pack(side=tk.LEFT, padx=(8, 10))
+    arc_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
+    score_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
     btns = ttk.Frame(frame)
     btns.pack(fill=tk.X, pady=(10, 8))

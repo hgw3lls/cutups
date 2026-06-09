@@ -42,6 +42,8 @@ def main() -> None:
     by_section = Counter()
     last_overrides: Dict[str, float] = {}
     last_filter_severity = ""
+    last_section_arc = ""
+    last_source_score = ""
 
     while True:
         try:
@@ -70,6 +72,12 @@ def main() -> None:
                     filter_severity = row.get("filter_severity", "")
                     if isinstance(filter_severity, str) and filter_severity:
                         last_filter_severity = filter_severity
+                    section_arc = row.get("section_arc", "")
+                    if isinstance(section_arc, str) and section_arc:
+                        last_section_arc = section_arc
+                    source_score = row.get("source_score", "")
+                    if isinstance(source_score, str) and source_score:
+                        last_source_score = source_score
         except OSError:
             pass
 
@@ -95,11 +103,15 @@ def main() -> None:
             print("  - (none yet)")
 
         print("\nlast overrides:")
-        if last_overrides or last_filter_severity:
+        if last_overrides or last_filter_severity or last_section_arc or last_source_score:
             for k in sorted(last_overrides):
                 print(f"  - {k:18s} {last_overrides[k]:.3f}")
             if last_filter_severity:
                 print(f"  - {'filter_severity':18s} {last_filter_severity}")
+            if last_section_arc:
+                print(f"  - {'section_arc':18s} {last_section_arc}")
+            if last_source_score:
+                print(f"  - {'source_score':18s} {last_source_score}")
         else:
             print("  - (none yet)")
 
