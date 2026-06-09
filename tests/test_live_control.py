@@ -487,6 +487,8 @@ class LiveControlTests(unittest.TestCase):
                 "Input does not exist",
                 live_control_gui.validate_render_settings(str(root / "missing.wav"), "30", "120", "off", "", False, "8", root),
             )
+            self.assertEqual(root / "relative.wav", live_control_gui.resolve_render_path("relative.wav", root))
+            self.assertEqual(source, live_control_gui.resolve_render_path(str(source), root))
 
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(

@@ -81,6 +81,15 @@ def cutup_script_path() -> Path:
     return Path(__file__).resolve().with_name("cutup.py")
 
 
+def open_with_system(path: Path) -> None:
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    elif sys.platform.startswith("win"):
+        subprocess.Popen(["cmd", "/c", "start", "", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
 def build_render_command(
     python_executable: str,
     script_path: Path,
@@ -348,6 +357,7 @@ class ControlGUI:
     telemetry_pos: int
     vars: Dict[str, tk.DoubleVar]
     status_var: tk.StringVar
+    validation_var: tk.StringVar
     progress_var: tk.DoubleVar
     progress_text_var: tk.StringVar
     progress_detail_var: tk.StringVar
@@ -464,9 +474,31 @@ class ControlGUI:
         self.command_box.delete("1.0", tk.END)
         self.command_box.insert("1.0", command)
         self.command_box.configure(state="disabled")
+        self.update_launch_check()
 
-    def choose_input(self) -> None:
+    def current_validation_error(self) -> str:
+        return validate_render_settings(
+            self.input_var.get(),
+            self.duration_var.get(),
+            self.bpm_var.get(),
+            self.slice_grid_var.get(),
+            self.baseline_var.get(),
+            bool(self.semi_live_var.get()),
+            self.chunk_sec_var.get(),
+            cutup_script_path().parents[1],
+        )
+
+    def update_launch_check(self) -> None:
+        error = self.current_validation_error()
+        self.validation_var.set(error if error else "Ready to render")
+
+    def choose_input_folder(self) -> None:
         chosen = filedialog.askdirectory(title="Choose audio source folder")
+        if chosen:
+            self.input_var.set(chosen)
+
+    def choose_input_file(self) -> None:
+        chosen = filedialog.askopenfilename(title="Choose audio source file", filetypes=[("Audio files", "*.wav *.mp3 *.flac *.aiff *.ogg *.m4a"), ("All files", "*.*")])
         if chosen:
             self.input_var.set(chosen)
 
@@ -490,14 +522,36 @@ class ControlGUI:
             self.status_var.set(f"Track not written yet: {path}")
             return
         try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", str(path)])
-            elif sys.platform.startswith("win"):
-                subprocess.Popen(["cmd", "/c", "start", "", str(path)])
-            else:
-                subprocess.Popen(["xdg-open", str(path)])
+            open_with_system(path)
         except OSError as exc:
             self.status_var.set(f"Could not open track: {exc}")
+
+    def open_output(self) -> None:
+        output = resolve_render_path(self.output_var.get().strip() or "out/gui_render", cutup_script_path().parents[1])
+        target = output if output.exists() else output.parent
+        if not target.exists():
+            self.status_var.set(f"Output folder not available yet: {output}")
+            return
+        try:
+            open_with_system(target)
+        except OSError as exc:
+            self.status_var.set(f"Could not open output: {exc}")
+
+    def open_log(self) -> None:
+        log_path = self.render_log_path or self.telemetry_file.with_suffix(".log")
+        if not log_path.exists():
+            self.status_var.set(f"Log not written yet: {log_path}")
+            return
+        try:
+            open_with_system(log_path)
+        except OSError as exc:
+            self.status_var.set(f"Could not open log: {exc}")
+
+    def copy_command(self) -> None:
+        command = " ".join(shlex.quote(part) for part in self.current_render_command())
+        self.root.clipboard_clear()
+        self.root.clipboard_append(command)
+        self.status_var.set("Copied render command")
 
     def render_log_tail(self, max_lines: int = 6) -> str:
         if not self.render_log_path or not self.render_log_path.exists():
@@ -513,19 +567,11 @@ class ControlGUI:
             self.status_var.set("Render already running")
             return
         render_cwd = cutup_script_path().parents[1]
-        validation_error = validate_render_settings(
-            self.input_var.get(),
-            self.duration_var.get(),
-            self.bpm_var.get(),
-            self.slice_grid_var.get(),
-            self.baseline_var.get(),
-            bool(self.semi_live_var.get()),
-            self.chunk_sec_var.get(),
-            render_cwd,
-        )
+        validation_error = self.current_validation_error()
         if validation_error:
             self.status_var.set(validation_error)
             self.progress_detail_var.set(validation_error)
+            self.validation_var.set(validation_error)
             return
         self.write_payload()
         self.progress_var.set(0.0)
@@ -587,7 +633,13 @@ class ControlGUI:
         self.arc_var.set(str(data.get("section_arc", "classic")))
         self.score_var.set(str(data.get("source_score", "off")))
         self.placement_var.set(str(data.get("baseline_placement", "any")))
+        if preset_name in {"beat-cutup", "hard-stutter"}:
+            if not self.bpm_var.get().strip():
+                self.bpm_var.set("120")
+            if self.slice_grid_var.get().strip() == "off":
+                self.slice_grid_var.set("1/16")
         self.write_payload()
+        self.update_command_preview()
 
     def reset_defaults(self) -> None:
         self.apply_preset("Default")
@@ -621,6 +673,7 @@ def main() -> None:
     ).pack(anchor="w", pady=(0, 10))
 
     status_var = tk.StringVar(value=f"Control file: {control_file}")
+    validation_var = tk.StringVar(value="Checking launch settings")
     progress_var = tk.DoubleVar(value=0.0)
     progress_text_var = tk.StringVar(value="  0.0%  waiting  ETA --:--")
     progress_detail_var = tk.StringVar(value=f"Telemetry: {telemetry_file}")
@@ -657,6 +710,7 @@ def main() -> None:
         telemetry_pos=0,
         vars=vars_map,
         status_var=status_var,
+        validation_var=validation_var,
         progress_var=progress_var,
         progress_text_var=progress_text_var,
         progress_detail_var=progress_detail_var,
@@ -687,11 +741,17 @@ def main() -> None:
 
     ttk.Label(render_frame, text="Input").grid(row=0, column=0, sticky="w")
     ttk.Entry(render_frame, textvariable=input_var).grid(row=0, column=1, sticky="ew", padx=(8, 8))
-    ttk.Button(render_frame, text="Choose", command=gui.choose_input).grid(row=0, column=2, sticky="e")
+    input_buttons = ttk.Frame(render_frame)
+    input_buttons.grid(row=0, column=2, sticky="e")
+    ttk.Button(input_buttons, text="Folder", command=gui.choose_input_folder).pack(side=tk.LEFT)
+    ttk.Button(input_buttons, text="File", command=gui.choose_input_file).pack(side=tk.LEFT, padx=(6, 0))
 
     ttk.Label(render_frame, text="Output").grid(row=1, column=0, sticky="w", pady=(6, 0))
     ttk.Entry(render_frame, textvariable=output_var).grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
-    ttk.Button(render_frame, text="Choose", command=gui.choose_output).grid(row=1, column=2, sticky="e", pady=(6, 0))
+    output_buttons = ttk.Frame(render_frame)
+    output_buttons.grid(row=1, column=2, sticky="e", pady=(6, 0))
+    ttk.Button(output_buttons, text="Choose", command=gui.choose_output).pack(side=tk.LEFT)
+    ttk.Button(output_buttons, text="Open", command=gui.open_output).pack(side=tk.LEFT, padx=(6, 0))
 
     timing_row = ttk.Frame(render_frame)
     timing_row.grid(row=2, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(6, 0))
@@ -724,6 +784,9 @@ def main() -> None:
     launch_row.grid(row=6, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
     ttk.Button(launch_row, text="Start render", command=gui.start_render).pack(side=tk.LEFT)
     ttk.Button(launch_row, text="Stop", command=gui.stop_render).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(launch_row, text="Copy command", command=gui.copy_command).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(launch_row, text="Open log", command=gui.open_log).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Label(render_frame, textvariable=validation_var).grid(row=7, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(4, 0))
 
     progress_frame = ttk.LabelFrame(frame, text="Render progress / playable track", padding=8)
     progress_frame.pack(fill=tk.X, pady=(8, 8))

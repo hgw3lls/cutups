@@ -387,9 +387,9 @@ The GUI provides:
 - continuous slider control for all current live-override keys
 - conductor controls: force section, hold section, burst-now, panic-silence
 - one-click presets (`Default`, `Bureaucratic Pressure`, `Ghost Broadcast`, `Collapse Ritual`)
-- input/output/baseline selectors and Start/Stop render buttons for local audio renders
+- file/folder input, output, and baseline selectors with Start/Stop render buttons for local audio renders
 - semi-live renders that write short chunks into a cumulative playable WAV track while the job is still running
-- command preview plus progress/ETA from the matching telemetry JSONL file
+- launch validation, command copying, output/log open buttons, and progress/ETA from the matching telemetry JSONL file
 - immediate JSON writes compatible with `cutup.py` live polling
 
 ---
@@ -483,6 +483,7 @@ Notes:
 - Writes the same JSON schema accepted by `--live-control-file`.
 - Also reads progress telemetry when `cutup.py` is run with the matching `--live-telemetry-jsonl` path.
 - Enables semi-live track rendering by default for GUI-launched renders. The growing track path appears in the progress panel as chunks finish; use `Open track` to audition the latest written WAV.
+- Checks common launch mistakes before starting a render, including missing input paths, grid slicing without BPM, invalid duration, invalid chunk size, and missing baseline beat files.
 
 ```bash
 python PY/live_control_gui.py \
