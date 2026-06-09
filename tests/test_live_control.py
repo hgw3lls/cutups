@@ -36,6 +36,7 @@ def _install_pydub_stubs() -> None:
 _install_pydub_stubs()
 
 from PY import cutup  # noqa: E402
+from PY import live_control_gui  # noqa: E402
 from PY import live_control_td_bridge as td_bridge  # noqa: E402
 
 
@@ -125,6 +126,12 @@ class LiveControlTests(unittest.TestCase):
             baseline_placement_original_start_ms=375,
             baseline_placement_cell_index=4,
             baseline_placement_cell_energy=0.12,
+            planner_profile="phrase",
+            planner_intent="reorder phrases with light interruptions",
+            phrase_protected=True,
+            beat_grid_ms=125,
+            beat_grid_cell_index=2,
+            beat_grid_offset_ms=0,
         )
         baseline_path = str(REPO_ROOT / "baseline.wav")
         args = types.SimpleNamespace(
@@ -136,6 +143,7 @@ class LiveControlTests(unittest.TestCase):
             section_arc="spoken",
             arrangement_style="sequential",
             source_score="spoken",
+            planner_profile="phrase",
             source_diversity=0.65,
             concrete=False,
             bed_noise=False,
@@ -159,12 +167,16 @@ class LiveControlTests(unittest.TestCase):
         )
         plan = cutup.build_audio_plan("cutup_01", [event], args, 2000, 100, 700)
         self.assertEqual(plan["kind"], "cutups.audio_composition_plan")
-        self.assertEqual(plan["version"], 2)
+        self.assertEqual(plan["version"], 3)
         self.assertEqual(plan["summary"]["event_count"], 1)
         self.assertEqual(plan["summary"]["cue_event_count"], 1)
+        self.assertEqual(plan["summary"]["phrase_protected_event_count"], 1)
+        self.assertEqual(plan["summary"]["grid_aligned_event_count"], 1)
         self.assertEqual(plan["config"]["beat_grid_ms"], 125)
         self.assertEqual(plan["config"]["section_arc"], "spoken")
+        self.assertEqual(plan["config"]["planner_profile"], "phrase")
         self.assertEqual(plan["config"]["source_score"], "spoken")
+        self.assertEqual(plan["config"]["effective_source_score"], "spoken")
         self.assertEqual(plan["config"]["source_diversity"], 0.65)
         self.assertEqual(plan["config"]["baseline_beat"], baseline_path)
         self.assertEqual(plan["config"]["baseline_beat_gain"], -12.0)
@@ -190,10 +202,14 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["events"][0]["planner"]["section_targets"]["fragment_multiplier"], 1.2)
         self.assertEqual(plan["events"][0]["planner"]["baseline_placement"]["mode"], "gap")
         self.assertEqual(plan["events"][0]["planner"]["baseline_placement"]["cell_index"], 4)
+        self.assertEqual(plan["events"][0]["planner"]["construction"]["profile"], "phrase")
+        self.assertTrue(plan["events"][0]["planner"]["construction"]["phrase_protected"])
+        self.assertEqual(plan["events"][0]["planner"]["beat_grid"]["cell_index"], 2)
         self.assertNotIn("source_final_weight", plan["events"][0])
         self.assertEqual(len(plan["section_windows"]), 5)
         self.assertEqual(len(plan["section_targets"]), 5)
         self.assertEqual(plan["section_targets"][0]["section_arc"], "spoken")
+        self.assertEqual(plan["section_targets"][0]["planner_profile"], "phrase")
 
     def test_baseline_beat_bpm_from_duration(self) -> None:
         self.assertEqual(cutup.baseline_beat_bpm_from_duration(8000, 4), 120.0)
@@ -373,6 +389,77 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(cutup.format_eta(None), "--:--")
         self.assertEqual(cutup.progress_child_span((0.2, 0.8), 0.25, 0.75), (0.35000000000000003, 0.6500000000000001))
         self.assertEqual(cutup.progress_spans("all")["audio"], (0.22, 1.0))
+
+    def test_planner_profile_auto_follows_source_score(self) -> None:
+        self.assertEqual(cutup.planner_profile_name(types.SimpleNamespace(planner_profile="auto", source_score="spoken", preset="")), "phrase")
+        self.assertEqual(cutup.planner_profile_name(types.SimpleNamespace(planner_profile="auto", source_score="beat", preset="")), "beat")
+        self.assertEqual(cutup.effective_source_score_mode(types.SimpleNamespace(planner_profile="breach", source_score="off", preset="")), "breach")
+
+    def test_classify_dataset_source_recommends_roles(self) -> None:
+        beat = cutup.classify_dataset_source(Path("drum_loop_120.wav"), 8000, 2, -12.0, 0.05)
+        self.assertEqual(beat["role"], "beat")
+        self.assertEqual(beat["recommended_preset"], "beat-cutup")
+        self.assertIn("loop", beat["tags"])
+
+        breach = cutup.classify_dataset_source(Path("radio_static_dropout.wav"), 1600, 2, -8.0, 0.3)
+        self.assertEqual(breach["role"], "breach")
+        self.assertEqual(breach["recommended_preset"], "signal-breach")
+        self.assertGreaterEqual(breach["intensity"], 2)
+
+        spoken = cutup.classify_dataset_source(Path("voice_phrase_a.wav"), 3200, 3, -20.0, 0.04)
+        self.assertEqual(spoken["role"], "spoken")
+        self.assertIn("transcription", spoken["notes"])
+
+    def test_dataset_manifest_and_report_writers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rows = [
+                {
+                    "file": "voice.wav",
+                    "role": "spoken",
+                    "tags": "spoken,voice",
+                    "intensity": 0,
+                    "loop_hint": 0,
+                    "words": 2,
+                    "weight": 1.2,
+                    "duration_ms": 1000,
+                    "duration_sec": 1.0,
+                    "dbfs": -18.0,
+                    "zero_crossing_rate": 0.02,
+                    "recommended_preset": "spoken-word-cutup",
+                    "recommended_flags": "--preset spoken-word-cutup",
+                    "notes": "cue recommended",
+                }
+            ]
+            manifest = root / "manifest.csv"
+            report_path = root / "report.json"
+            cutup.write_dataset_manifest(manifest, rows)
+            report = cutup.dataset_report(root, rows, unreadable=1)
+            cutup.write_dataset_report(report_path, report)
+            self.assertIn("recommended_preset", manifest.read_text(encoding="utf-8"))
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["kind"], "cutups.dataset_report")
+            self.assertEqual(payload["role_counts"]["spoken"], 1)
+
+    def test_live_gui_build_render_command(self) -> None:
+        cmd = live_control_gui.build_render_command(
+            "python",
+            Path("/repo/PY/cutup.py"),
+            "./samples",
+            "out/gui",
+            "beat-cutup",
+            "32",
+            Path("live.json"),
+            Path("telemetry.jsonl"),
+            bpm="120",
+            slice_grid="1/16",
+            baseline_beat="./beat.wav",
+        )
+        self.assertEqual(cmd[:5], ["python", "/repo/PY/cutup.py", "--mode", "audio", "--input"])
+        self.assertIn("--preset", cmd)
+        self.assertIn("beat-cutup", cmd)
+        self.assertIn("--baseline-beat", cmd)
+        self.assertIn("./beat.wav", cmd)
 
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(

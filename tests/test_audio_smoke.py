@@ -93,6 +93,36 @@ class AudioSmokeTests(unittest.TestCase):
         self.assertIn("presets:", result.stdout)
         self.assertRegex(result.stdout, r"status: (ready|action needed)")
 
+    def test_scan_dataset_writes_manifest_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice_phrase.wav"
+            manifest = root / "source_manifest.csv"
+            report = root / "dataset_report.json"
+            _write_tone_wav(source, duration_s=1.0)
+            result = self.run_cutup(
+                [
+                    "--scan-dataset",
+                    str(root),
+                    "--write-source-manifest",
+                    str(manifest),
+                    "--write-dataset-report",
+                    str(report),
+                    "--overwrite",
+                ]
+            )
+            self.assertIn("DATASET SCAN", result.stdout)
+            self.assertIn("audio_files: 1", result.stdout)
+            self.assertTrue(manifest.exists())
+            self.assertTrue(report.exists())
+            rows = list(csv.DictReader(manifest.open(newline="", encoding="utf-8")))
+            self.assertEqual(len(rows), 1)
+            self.assertIn(rows[0]["role"], {"spoken", "texture", "breach", "beat"})
+            self.assertIn("recommended_preset", rows[0])
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(payload["kind"], "cutups.dataset_report")
+            self.assertEqual(payload["audio_files"], 1)
+
     def test_audio_cli_smoke_writes_master_preview_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -192,6 +222,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertIn("section_density_target", rows[0])
             self.assertIn("baseline_placement_mode", rows[0])
             self.assertIn("baseline_placement_cell_index", rows[0])
+            self.assertIn("planner_profile", rows[0])
+            self.assertIn("beat_grid_cell_index", rows[0])
             self.assertEqual(rows[0]["source_manifest_role"], "beat")
             self.assertEqual(rows[0]["source_manifest_weight"], "1.4")
             event_sources = {row["source_basename"] for row in rows}
@@ -203,7 +235,7 @@ class AudioSmokeTests(unittest.TestCase):
 
             render_plan = json.loads(plan.read_text(encoding="utf-8"))
             self.assertEqual(render_plan["kind"], "cutups.audio_composition_plan")
-            self.assertEqual(render_plan["version"], 2)
+            self.assertEqual(render_plan["version"], 3)
             self.assertEqual(render_plan["variant"], "cutup_01")
             self.assertEqual(render_plan["seed"], 101)
             self.assertEqual(render_plan["preset"], "beat-cutup")
@@ -219,6 +251,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["config"]["baseline_beat_inferred_bpm"], 120.0)
             self.assertEqual(render_plan["config"]["bpm"], 120.0)
             self.assertEqual(render_plan["config"]["beat_grid_ms"], 125)
+            self.assertEqual(render_plan["config"]["planner_profile"], "beat")
+            self.assertEqual(render_plan["config"]["effective_source_score"], "beat")
             self.assertTrue(render_plan["baseline_grid"]["active"])
             self.assertEqual(render_plan["baseline_grid"]["mode"], "gap")
             self.assertEqual(render_plan["baseline_grid"]["grid_ms"], 125)
@@ -232,6 +266,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["config"]["source_manifest_matches"], 1)
             self.assertEqual(render_plan["config"]["beat_novelty"], 0.4)
             self.assertEqual(render_plan["summary"]["event_count"], len(rows))
+            self.assertIn("grid_aligned_event_count", render_plan["summary"])
+            self.assertGreaterEqual(render_plan["summary"]["grid_aligned_event_count"], 0)
             self.assertEqual(len(render_plan["events"]), len(rows))
             self.assertEqual(len(render_plan["section_windows"]), 5)
             self.assertEqual(len(render_plan["section_targets"]), 5)
@@ -240,6 +276,8 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertIn("selection_reason", render_plan["events"][0]["planner"])
             self.assertIn("source_weight", render_plan["events"][0]["planner"])
             self.assertIn("section_targets", render_plan["events"][0]["planner"])
+            self.assertIn("construction", render_plan["events"][0]["planner"])
+            self.assertIn("beat_grid", render_plan["events"][0]["planner"])
             self.assertEqual(render_plan["events"][0]["planner"]["source_weight"]["source_score_mode"], "beat")
             self.assertEqual(render_plan["events"][0]["planner"]["source_weight"]["manifest_weight"], 1.4)
             self.assertEqual(render_plan["events"][0]["source_manifest_role"], "beat")

@@ -18,6 +18,17 @@ cutups --init-qa-sources ../cutups_qa_sources
 
 This writes `loops`, `voice`, and `signal` folders. The voice folder includes `voice_phrase_a.srt` and `voice_cues.csv` for cue-slicing tests.
 
+Scan a local source folder before rendering when you are pointing `cutups` at an unfamiliar dataset:
+
+```bash
+cutups \
+  --scan-dataset ./samples \
+  --write-source-manifest ./samples/source_manifest.csv \
+  --write-dataset-report ./samples/dataset_report.json
+```
+
+The scan writes editable role hints (`spoken`, `beat`, `breach`, or `texture`), tags, weights, and recommended presets. Use the generated CSV with `--source-manifest`; revise it by hand when you know a file's role better than the heuristic.
+
 ## Presets
 
 List the current TRANSMISSIONS presets:
@@ -230,6 +241,17 @@ Use `--source-diversity 0.0..1.0` when a render overuses one file from a larger 
 
 Use `--source-score off|spoken|beat|breach` to bias which source is selected before slicing and placement. This uses local metadata only: duration, cue word counts, cue text, file names, intensity hints, loop hints, and the current section. Presets enable the appropriate mode automatically, and `--source-score off` restores unscored source weighting.
 
+## Planner Profiles
+
+Use `--planner-profile auto|classic|phrase|beat|breach` to bias construction beyond source scoring:
+
+- `auto`: follows the active preset/source score.
+- `phrase`: protects cued or spoken material from heavy reversal, swarm, hard cuts, and unstable speed changes.
+- `beat`: favors rhythmic layers, grid-aware steps, and beat-grid diagnostics.
+- `breach`: pushes damaged-signal construction with harder cuts, filtering, silence, and ghost/cut layers.
+
+Each `cutup_XX_plan.json` records the selected planner profile, per-section intent, phrase-protected event count, and beat-grid event diagnostics.
+
 ## Source Manifest
 
 Use `--source-manifest ./sources.csv` or `--source-manifest ./sources.json` when a mixed dataset needs explicit labels. CSV columns can include `file`, `role`, `tags`, `intensity`, `loop_hint`, `words`, and `weight`.
@@ -302,6 +324,8 @@ For GUI progress, start the live GUI with a telemetry file and run `cutup.py` wi
 python PY/live_control_gui.py --control-file ./live_control.json --telemetry-file ./live_control_telemetry.jsonl
 python PY/cutup.py --mode audio --input ./samples --output out/live_progress --live-control-file ./live_control.json --live-telemetry-jsonl ./live_control_telemetry.jsonl
 ```
+
+The GUI can also launch local audio renders directly. Choose input/output paths, preset, duration, optional BPM/grid, and optional baseline beat, then use Start render. It writes the same live-control JSON and telemetry paths shown above, so sliders and progress continue to work during the render.
 
 Each audio variant also writes `cutup_XX_plan.json`, a structured render plan with section windows, event choices, source/layer summaries, transform tags, and per-event `planner` diagnostics. Use it when comparing whether a cutup is being constructed intelligently, not just whether it sounds good. The matching `cutup_XX_events.csv` includes flat diagnostic columns for spreadsheet review.
 

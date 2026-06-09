@@ -89,6 +89,7 @@ SECTION_PROGRESS = {
 SECTION_ARCS = ("classic", "spoken", "breach", "pulse", "ghost")
 SECTION_PROFILE_KEYS = ("dens", "frag_mul", "repeat", "reverse", "filt", "silence", "ghost")
 SOURCE_SCORE_MODES = ("off", "spoken", "beat", "breach")
+PLANNER_PROFILES = ("auto", "classic", "phrase", "beat", "breach")
 BASELINE_PLACEMENT_MODES = ("any", "accent", "gap", "offbeat")
 SPOKEN_SOURCE_KEYWORDS = ("voice", "speech", "spoken", "phrase", "dialog", "dialogue", "interview", "reading", "narration")
 BEAT_SOURCE_KEYWORDS = ("beat", "loop", "drum", "kick", "snare", "hat", "bass", "perc", "pulse", "groove", "rhythm")
@@ -181,7 +182,7 @@ LIVE_CONTROL_LIMITS: Dict[str, Tuple[float, float]] = {
 BEAT_RATE_KEYS = ("stutter_rate", "mute_rate", "repeat_rate", "beat_dropout_rate")
 OPTIONAL_ANALYSIS_MODULES = (("librosa", "librosa"), ("scikit-learn", "sklearn"))
 ANALYSIS_CACHE_VERSION = 8
-AUDIO_PLAN_VERSION = 2
+AUDIO_PLAN_VERSION = 3
 ANALYSIS_CACHE_REQUIRED_SAMPLE_KEYS = ("zero_crossing_rate", "grid_cell_summary", "similarity_vector")
 ANALYSIS_GRID_CELL_MAX_CELLS = 512
 BASELINE_GRID_SUMMARY_MAX_CELLS = 128
@@ -194,6 +195,11 @@ ANALYSIS_SIMILARITY_VECTOR_FIELDS = (
     "grid_zcr_mean",
     "grid_zcr_variation",
 )
+DATASET_MANIFEST_FIELDS = [
+    "file", "role", "tags", "intensity", "loop_hint", "words", "weight",
+    "duration_ms", "duration_sec", "dbfs", "zero_crossing_rate",
+    "recommended_preset", "recommended_flags", "notes",
+]
 QA_SOURCE_SPECS: Dict[str, Tuple[Tuple[str, float, str], ...]] = {
     "loops": (
         ("drum_pulse_120.wav", 8.0, "loop_drums"),
@@ -232,6 +238,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "dense",
             "sectional": True,
             "section_arc": "breach",
+            "planner_profile": "breach",
             "source_score": "breach",
             "concrete": True,
             "bed_noise": True,
@@ -259,6 +266,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "medium",
             "sectional": True,
             "section_arc": "spoken",
+            "planner_profile": "phrase",
             "source_score": "spoken",
             "concrete": False,
             "arrangement_style": "sequential",
@@ -286,6 +294,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "dense",
             "sectional": False,
             "section_arc": "pulse",
+            "planner_profile": "beat",
             "source_score": "beat",
             "concrete": True,
             "arrangement_style": "swarm",
@@ -311,6 +320,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "medium",
             "sectional": True,
             "section_arc": "ghost",
+            "planner_profile": "breach",
             "source_score": "breach",
             "concrete": True,
             "bed_noise": True,
@@ -336,6 +346,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "dense",
             "sectional": True,
             "section_arc": "pulse",
+            "planner_profile": "beat",
             "source_score": "beat",
             "concrete": True,
             "arrangement_style": "collapse",
@@ -362,6 +373,7 @@ PRESET_VALUES: Dict[str, Dict[str, object]] = {
             "density": "medium",
             "sectional": True,
             "section_arc": "ghost",
+            "planner_profile": "phrase",
             "source_score": "spoken",
             "concrete": False,
             "bed_noise": True,
@@ -384,6 +396,14 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
     "qa-sources": (
         "Create starter local WAV and cue sources outside the repo.",
         "cutups --init-qa-sources ../cutups_qa_sources",
+    ),
+    "scan-dataset": (
+        "Inspect a local audio folder and write a starter source manifest plus JSON report.",
+        "cutups \\\n"
+        "  --scan-dataset ../cutups_qa_sources \\\n"
+        "  --write-source-manifest ../cutups_qa_sources/source_manifest.csv \\\n"
+        "  --write-dataset-report ../cutups_qa_sources/dataset_report.json \\\n"
+        "  --overwrite",
     ),
     "signal-breach": (
         "Glitchy interruptions, static bursts, dropouts, reverse shards, and hard transmission filtering.",
@@ -641,6 +661,12 @@ class Event:
     baseline_placement_original_start_ms: int = 0
     baseline_placement_cell_index: int = -1
     baseline_placement_cell_energy: float = 0.0
+    planner_profile: str = "classic"
+    planner_intent: str = ""
+    phrase_protected: bool = False
+    beat_grid_ms: int = 0
+    beat_grid_cell_index: int = -1
+    beat_grid_offset_ms: int = 0
 
 
 EVENT_CSV_FIELDS = [
@@ -658,7 +684,9 @@ EVENT_CSV_FIELDS = [
     "section_fragment_multiplier", "section_repeat_probability",
     "section_ghost_probability", "baseline_placement_mode",
     "baseline_placement_original_start_ms", "baseline_placement_cell_index",
-    "baseline_placement_cell_energy",
+    "baseline_placement_cell_energy", "planner_profile", "planner_intent",
+    "phrase_protected", "beat_grid_ms", "beat_grid_cell_index",
+    "beat_grid_offset_ms",
 ]
 
 
@@ -951,6 +979,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--show-recipe", choices=["all", *sorted(RECIPE_COMMANDS)], default="", help="Print a copy-ready TRANSMISSIONS command recipe and exit.")
     p.add_argument("--doctor", action="store_true", help="Check local Python/audio dependencies and bundled data, then exit.")
     p.add_argument("--init-qa-sources", default="", help="Write synthetic local QA WAV/cue sources under this folder, then exit.")
+    p.add_argument("--scan-dataset", default="", help="Scan an audio file/folder, print role/preset recommendations, and exit.")
+    p.add_argument("--write-source-manifest", default="", help="With --scan-dataset, write a starter source manifest CSV to this path.")
+    p.add_argument("--write-dataset-report", default="", help="With --scan-dataset, write a JSON dataset report to this path.")
+    p.add_argument("--dataset-max-files", type=int, default=0, help="With --scan-dataset, limit decoded audio files; 0 scans all candidates.")
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--no-progress", action="store_true", help="Disable terminal progress bar output.")
@@ -986,6 +1018,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--concrete", action=argparse.BooleanOptionalAction, default=False, help="Bias toward harsher concrete transformations.")
     p.add_argument("--sectional", action=argparse.BooleanOptionalAction, default=False, help="Enable section-aware timeline behavior.")
     p.add_argument("--section-arc", choices=SECTION_ARCS, default="classic", help="Named section energy curve used when --sectional is active.")
+    p.add_argument("--planner-profile", choices=PLANNER_PROFILES, default="auto", help="High-level audio planner bias. Auto follows preset/source-score.")
     p.add_argument("--arrangement-style", choices=["sequential", "swarm", "collapse"], default="swarm")
     p.add_argument("--source-score", choices=SOURCE_SCORE_MODES, default="off", help="Material-aware source weighting before placement.")
     p.add_argument("--source-diversity", type=float, default=0.0, help="Source balancing 0..1; higher values penalize immediate and repeated source reuse.")
@@ -1042,6 +1075,9 @@ def parse_args() -> argparse.Namespace:
         cue_count = len([path for path in written if path.suffix.lower() in {".srt", ".csv"}])
         if cue_count:
             print(f"  cues: {cue_count} files")
+        raise SystemExit(0)
+    if parsed.scan_dataset:
+        run_dataset_scan_cli(parsed)
         raise SystemExit(0)
     return parsed
 
@@ -1178,6 +1214,12 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
     """Validate and normalize CLI arguments with clear failure reasons."""
     apply_preset(args)
     apply_phrase_length(args)
+    if args.write_source_manifest and not args.scan_dataset:
+        raise SystemExit("--write-source-manifest requires --scan-dataset")
+    if args.write_dataset_report and not args.scan_dataset:
+        raise SystemExit("--write-dataset-report requires --scan-dataset")
+    if args.dataset_max_files < 0:
+        raise SystemExit("--dataset-max-files must be >= 0")
     if args.variants < 1:
         raise SystemExit("--variants must be >= 1")
     if args.sample_rate < 8000:
@@ -1624,8 +1666,74 @@ def silence_duration_ms(args: argparse.Namespace, fallback: Tuple[int, int]) -> 
     return random.randint(int(low), int(high))
 
 
+def planner_profile_name(args: argparse.Namespace) -> str:
+    requested = str(getattr(args, "planner_profile", "auto") or "auto").lower()
+    if requested in {"classic", "phrase", "beat", "breach"}:
+        return requested
+    mode = source_score_mode(args)
+    if mode == "spoken":
+        return "phrase"
+    if mode == "beat":
+        return "beat"
+    if mode == "breach":
+        return "breach"
+    preset = str(getattr(args, "preset", "") or "").lower()
+    if "spoken" in preset or "ghost" in preset:
+        return "phrase"
+    if "beat" in preset or "stutter" in preset:
+        return "beat"
+    if "breach" in preset or "radio" in preset:
+        return "breach"
+    return "classic"
+
+
+def source_is_spoken(sample: SampleFile) -> bool:
+    text = source_text_blob(sample)
+    return (
+        sample.has_cue()
+        or str(sample.manifest_role).lower() == "spoken"
+        or keyword_hits(text, SPOKEN_SOURCE_KEYWORDS) > 0
+    )
+
+
+def section_planner_intent(section: str, profile_name: str) -> str:
+    if profile_name == "phrase":
+        return {
+            "ENTRY": "establish intelligible phrase material",
+            "BUILD": "reorder phrases with light interruptions",
+            "PRESSURE": "tighten recurrence while preserving key words",
+            "COLLAPSE": "fracture phrases into memory returns",
+            "AFTERIMAGE": "let phrase ghosts decay into silence",
+        }.get(section, "phrase cutup")
+    if profile_name == "beat":
+        return {
+            "ENTRY": "lock source choices to the grid",
+            "BUILD": "develop rhythmic repeats and mutes",
+            "PRESSURE": "increase stutter density",
+            "COLLAPSE": "break the groove with dropouts",
+            "AFTERIMAGE": "leave sparse rhythmic residues",
+        }.get(section, "beat cutup")
+    if profile_name == "breach":
+        return {
+            "ENTRY": "establish unstable carrier",
+            "BUILD": "introduce corrupted interruptions",
+            "PRESSURE": "stack noise bursts and dropouts",
+            "COLLAPSE": "overload the transmission",
+            "AFTERIMAGE": "leave damaged residual signal",
+        }.get(section, "signal breach")
+    return {
+        "ENTRY": "introduce source material",
+        "BUILD": "develop cutup density",
+        "PRESSURE": "increase recurrence and pressure",
+        "COLLAPSE": "destabilize arrangement",
+        "AFTERIMAGE": "resolve into memory traces",
+    }.get(section, "cutup")
+
+
 def workflow_audio_profile(profile: Dict[str, float], args: argparse.Namespace) -> Dict[str, float]:
     out = dict(profile)
+    planner_profile = planner_profile_name(args)
+    out["planner_profile"] = planner_profile
     intelligibility = str(getattr(args, "intelligibility", "auto"))
     if intelligibility == "high":
         out["reverse"] = float(out.get("reverse", 0.0)) * 0.25
@@ -1667,11 +1775,44 @@ def workflow_audio_profile(profile: Dict[str, float], args: argparse.Namespace) 
         out["silence"] = float(out.get("silence", 0.0)) + 0.08
         out["swarm_bias"] = float(out.get("swarm_bias", 1.0)) * 1.3
 
+    if planner_profile == "phrase":
+        out["reverse"] = float(out.get("reverse", 0.0)) * 0.65
+        out["filt"] = float(out.get("filt", 0.0)) * 0.75
+        out["grain_bias"] = float(out.get("grain_bias", 1.0)) * 0.62
+        out["swarm_bias"] = float(out.get("swarm_bias", 1.0)) * 0.65
+        hard_cut *= 0.7
+    elif planner_profile == "beat":
+        out["repeat"] = float(out.get("repeat", 0.0)) * 1.12
+        out["silence"] = float(out.get("silence", 0.0)) * 0.82
+        out["grid_lock"] = 1.0
+        hard_cut *= 0.9
+    elif planner_profile == "breach":
+        out["reverse"] = float(out.get("reverse", 0.0)) * 1.18
+        out["filt"] = float(out.get("filt", 0.0)) * 1.12
+        out["silence"] = float(out.get("silence", 0.0)) + 0.05
+        out["grain_bias"] = float(out.get("grain_bias", 1.0)) * 1.18
+        hard_cut *= 1.22
+
     out["hard_cut"] = clamp(hard_cut, 0.0, 0.75)
     for key in ("reverse", "repeat", "filt", "silence", "ghost"):
         if key in out:
             out[key] = clamp(float(out[key]), 0.0, 0.99)
     return out
+
+
+def event_audio_profile(profile: Dict[str, float], args: argparse.Namespace, sample: SampleFile) -> Tuple[Dict[str, float], bool]:
+    out = dict(profile)
+    phrase_protected = planner_profile_name(args) == "phrase" and source_is_spoken(sample)
+    if phrase_protected:
+        out["reverse"] = min(float(out.get("reverse", 0.0)), 0.08)
+        out["repeat"] = min(float(out.get("repeat", 0.0)), 0.38)
+        out["filt"] = min(float(out.get("filt", 0.0)), 0.55)
+        out["hard_cut"] = min(float(out.get("hard_cut", 0.0)), 0.08)
+        out["silence"] = min(float(out.get("silence", 0.0)), 0.42)
+        out["grain_bias"] = min(float(out.get("grain_bias", 1.0)), 0.24)
+        out["swarm_bias"] = min(float(out.get("swarm_bias", 1.0)), 0.28)
+        out["speed_mode"] = "clear"
+    return out, phrase_protected
 
 
 def beat_grid_ms(args: argparse.Namespace) -> int:
@@ -2012,8 +2153,10 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"density: {args.density}")
     print(f"sectional: {args.sectional}")
     print(f"section_arc: {args.section_arc}")
+    print(f"planner_profile: {planner_profile_name(args)}")
     print(f"arrangement_style: {args.arrangement_style}")
     print(f"source_score: {source_score_mode(args)}")
+    print(f"effective_source_score: {effective_source_score_mode(args)}")
     print(f"source_diversity: {args.source_diversity:.2f}")
     print(f"concrete: {args.concrete}")
     print(f"bed_noise: {args.bed_noise}")
@@ -2968,6 +3111,237 @@ def discover_cue_samples(input_root: Path, cue_file: Path, exclude_paths: Option
     return samples, skipped
 
 
+def relative_dataset_path(path: Path, root: Path) -> str:
+    base = root if root.is_dir() else root.parent
+    try:
+        return str(path.resolve().relative_to(base.resolve()))
+    except ValueError:
+        return path.name
+
+
+def dataset_loop_hint(path: Path, duration_ms: int, text: str) -> int:
+    if keyword_hits(text, BEAT_SOURCE_KEYWORDS) > 0:
+        return 3
+    duration_s = duration_ms / 1000.0
+    if 1.0 <= duration_s <= 16.0:
+        common_loop_lengths = (1.0, 2.0, 4.0, 8.0, 16.0)
+        if any(abs(duration_s - length) <= 0.08 for length in common_loop_lengths):
+            return 2
+    if any(token in path.stem.lower() for token in ("loop", "bar", "bpm", "groove")):
+        return 2
+    return 0
+
+
+def classify_dataset_source(path: Path, duration_ms: int, words: int, dbfs: Optional[float], zero_crossing: float) -> Dict[str, object]:
+    text = f"{path.stem} {path.parent.name}".lower().replace("_", " ")
+    spoken_hits = keyword_hits(text, SPOKEN_SOURCE_KEYWORDS)
+    beat_hits = keyword_hits(text, BEAT_SOURCE_KEYWORDS)
+    breach_hits = keyword_hits(text, BREACH_SOURCE_KEYWORDS)
+    loop_hint = dataset_loop_hint(path, duration_ms, text)
+    loudness = -90.0 if dbfs is None else float(dbfs)
+    duration_s = duration_ms / 1000.0
+
+    if breach_hits >= max(spoken_hits, beat_hits, 1) or (zero_crossing >= 0.22 and duration_s <= 8.0):
+        role = "breach"
+    elif beat_hits > 0 or loop_hint >= 2:
+        role = "beat"
+    elif spoken_hits > 0 or (words >= 2 and duration_s >= 0.7):
+        role = "spoken"
+    else:
+        role = "texture"
+
+    tags = {role}
+    for keyword, target in (
+        ("voice", "voice"),
+        ("speech", "voice"),
+        ("phrase", "phrase"),
+        ("loop", "loop"),
+        ("drum", "drum"),
+        ("beat", "beat"),
+        ("noise", "noise"),
+        ("static", "static"),
+        ("radio", "radio"),
+        ("dropout", "dropout"),
+        ("glitch", "glitch"),
+    ):
+        if keyword in text:
+            tags.add(target)
+    if duration_s <= 0.5:
+        tags.add("micro")
+    elif duration_s <= 2.0:
+        tags.add("short")
+    elif duration_s >= 12.0:
+        tags.add("long")
+    if loudness > -18:
+        tags.add("hot")
+    if zero_crossing >= 0.18:
+        tags.add("noisy")
+
+    intensity = 0
+    intensity += min(3, breach_hits)
+    if loudness > -18:
+        intensity += 1
+    if zero_crossing >= 0.18:
+        intensity += 1
+    intensity = int(clamp(intensity, 0, 5))
+
+    if role == "spoken":
+        preset = "spoken-word-cutup"
+        flags = "--preset spoken-word-cutup --source-score spoken"
+        notes = "Add --cue-file or local transcription/alignment for phrase-accurate cuts."
+        weight = 1.35 if spoken_hits else 1.0
+    elif role == "beat":
+        preset = "beat-cutup"
+        flags = "--preset beat-cutup --source-score beat --bpm <tempo> --slice-grid 1/16"
+        notes = "Set --bpm manually unless this file is used as --baseline-beat with --baseline-beat-bars."
+        weight = 1.25 + min(0.5, loop_hint * 0.1)
+    elif role == "breach":
+        preset = "signal-breach"
+        flags = "--preset signal-breach --source-score breach"
+        notes = "Useful for bursts, dropouts, scanline textures, and radio interruptions."
+        weight = 1.35 + min(0.4, intensity * 0.08)
+    else:
+        preset = "ghost-transmission"
+        flags = "--preset ghost-transmission"
+        notes = "Unlabeled texture; add role/tags in the manifest if this should drive a specific workflow."
+        weight = 0.8
+
+    return {
+        "role": role,
+        "tags": ",".join(sorted(tags)),
+        "intensity": intensity,
+        "loop_hint": loop_hint,
+        "words": max(0, words),
+        "weight": round(float(weight), 3),
+        "recommended_preset": preset,
+        "recommended_flags": flags,
+        "notes": notes,
+    }
+
+
+def scan_dataset(root: Path, sample_rate: int = 44100, max_files: int = 0) -> Tuple[List[Dict[str, object]], int]:
+    ensure_audio_backend()
+    root = root.expanduser().resolve()
+    if not root.exists():
+        raise SystemExit(f"--scan-dataset path not found: {root}")
+    candidates = candidate_audio_paths(root)
+    if max_files > 0:
+        candidates = candidates[:max_files]
+    rows: List[Dict[str, object]] = []
+    unreadable = 0
+    for path in candidates:
+        try:
+            audio = AudioSegment.from_file(path).set_frame_rate(sample_rate).set_channels(2)
+        except Exception:
+            unreadable += 1
+            continue
+        duration_ms = len(audio)
+        if duration_ms <= 1:
+            unreadable += 1
+            continue
+        words = len(TOKEN_RE.findall(path.stem.replace("_", " ")))
+        dbfs = finite_audio_float(audio.dBFS)
+        zcr = zero_crossing_rate(audio)
+        classification = classify_dataset_source(path, duration_ms, words, dbfs, zcr)
+        row = {
+            "file": relative_dataset_path(path, root),
+            **classification,
+            "duration_ms": duration_ms,
+            "duration_sec": round(duration_ms / 1000.0, 3),
+            "dbfs": dbfs,
+            "zero_crossing_rate": zcr,
+        }
+        rows.append(row)
+    return rows, unreadable
+
+
+def dataset_report(root: Path, rows: List[Dict[str, object]], unreadable: int) -> Dict[str, object]:
+    role_counts = Counter(str(row.get("role", "")) for row in rows)
+    preset_counts = Counter(str(row.get("recommended_preset", "")) for row in rows)
+    tag_counts: Counter = Counter()
+    durations = [safe_float(str(row.get("duration_sec", 0.0)), 0.0) for row in rows]
+    for row in rows:
+        tag_counts.update(split_manifest_tags(row.get("tags", "")))
+
+    recommendations: List[str] = []
+    if role_counts.get("spoken", 0):
+        recommendations.append("Use --cue-file or local transcription/alignment for phrase-aware spoken-word renders.")
+    if role_counts.get("beat", 0):
+        recommendations.append("Use --bpm and --slice-grid, or pass a known loop with --baseline-beat and --baseline-beat-bars.")
+    if role_counts.get("breach", 0):
+        recommendations.append("Use signal-breach or radio-intrusion presets with --source-score breach.")
+    if len(rows) >= 8:
+        recommendations.append("Use --source-diversity 0.5..0.8 when the render collapses onto one source.")
+
+    return {
+        "kind": "cutups.dataset_report",
+        "version": 1,
+        "input": str(root.expanduser().resolve()),
+        "audio_files": len(rows),
+        "unreadable": unreadable,
+        "duration_sec_total": round(sum(durations), 3),
+        "duration_sec_min": round(min(durations), 3) if durations else 0.0,
+        "duration_sec_max": round(max(durations), 3) if durations else 0.0,
+        "role_counts": sorted_count_map(role_counts),
+        "recommended_preset_counts": sorted_count_map(preset_counts),
+        "top_tags": top_count_rows(tag_counts, limit=12),
+        "recommendations": recommendations,
+        "sources": rows,
+    }
+
+
+def write_dataset_manifest(path: Path, rows: List[Dict[str, object]], overwrite: bool = False) -> None:
+    if path.exists() and not overwrite:
+        raise SystemExit(f"--write-source-manifest already exists: {path}. Pass --overwrite to replace it.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=DATASET_MANIFEST_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def write_dataset_report(path: Path, payload: Dict[str, object], overwrite: bool = False) -> None:
+    if path.exists() and not overwrite:
+        raise SystemExit(f"--write-dataset-report already exists: {path}. Pass --overwrite to replace it.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def print_dataset_scan_summary(report: Dict[str, object], manifest_path: Optional[Path], report_path: Optional[Path]) -> None:
+    print("DATASET SCAN")
+    print(f"input: {report['input']}")
+    print(f"audio_files: {report['audio_files']}")
+    print(f"unreadable: {report['unreadable']}")
+    print(f"duration_sec_total: {report['duration_sec_total']}")
+    print(f"role_counts: {report['role_counts']}")
+    print(f"recommended_preset_counts: {report['recommended_preset_counts']}")
+    if manifest_path:
+        print(f"source_manifest: {manifest_path}")
+    if report_path:
+        print(f"dataset_report: {report_path}")
+    recommendations = report.get("recommendations", [])
+    if isinstance(recommendations, list) and recommendations:
+        print("recommendations:")
+        for item in recommendations:
+            print(f" - {item}")
+
+
+def run_dataset_scan_cli(args: argparse.Namespace) -> None:
+    if args.dataset_max_files < 0:
+        raise SystemExit("--dataset-max-files must be >= 0")
+    root = Path(args.scan_dataset).expanduser().resolve()
+    rows, unreadable = scan_dataset(root, sample_rate=max(8000, int(args.sample_rate)), max_files=int(args.dataset_max_files))
+    report = dataset_report(root, rows, unreadable)
+    manifest_path = Path(args.write_source_manifest).expanduser().resolve() if args.write_source_manifest else None
+    report_path = Path(args.write_dataset_report).expanduser().resolve() if args.write_dataset_report else None
+    if manifest_path:
+        write_dataset_manifest(manifest_path, rows, overwrite=bool(args.overwrite))
+    if report_path:
+        write_dataset_report(report_path, report, overwrite=bool(args.overwrite))
+    print_dataset_scan_summary(report, manifest_path, report_path)
+
+
 def finite_audio_float(value: float) -> Optional[float]:
     number = float(value)
     if not math.isfinite(number):
@@ -3373,6 +3747,20 @@ def source_score_mode(args: argparse.Namespace) -> str:
     return mode if mode in SOURCE_SCORE_MODES else "off"
 
 
+def effective_source_score_mode(args: argparse.Namespace) -> str:
+    mode = source_score_mode(args)
+    if mode != "off":
+        return mode
+    planner = planner_profile_name(args)
+    if planner == "phrase":
+        return "spoken"
+    if planner == "beat":
+        return "beat"
+    if planner == "breach":
+        return "breach"
+    return "off"
+
+
 def source_text_blob(sample: SampleFile) -> str:
     return f"{sample.path.stem} {sample.path.parent.name} {sample.manifest_role} {sample.manifest_tags} {sample.cue_text}".lower()
 
@@ -3386,7 +3774,7 @@ def source_material_score(
     args: argparse.Namespace,
     profile: Optional[Dict[str, float]] = None,
 ) -> float:
-    mode = source_score_mode(args)
+    mode = effective_source_score_mode(args)
     if mode == "off":
         return 1.0
 
@@ -3499,7 +3887,7 @@ def source_selection_diagnostics(
     )
     return {
         "selection_reason": reason,
-        "source_score_mode": source_score_mode(args),
+        "source_score_mode": effective_source_score_mode(args),
         "source_base_weight": components["base_weight"],
         "source_material_score": components["material_score"],
         "source_diversity_multiplier": components["diversity_multiplier"],
@@ -4310,6 +4698,8 @@ def section_target_rows(args: argparse.Namespace, total_ms: int) -> List[Dict[st
                 "silence_probability": round(float(profile["silence"]), 3),
                 "ghost_probability": round(float(profile["ghost"]), 3),
                 "hard_cut_probability": round(float(profile.get("hard_cut", 0.0)), 3),
+                "planner_profile": planner_profile_name(args),
+                "planner_intent": section_planner_intent(name, planner_profile_name(args)),
             }
         )
     return rows
@@ -4341,6 +4731,16 @@ def event_plan_row(event: Event, index: int) -> Dict[str, object]:
             "original_start_ms": row.pop("baseline_placement_original_start_ms", 0),
             "cell_index": row.pop("baseline_placement_cell_index", -1),
             "cell_energy": row.pop("baseline_placement_cell_energy", 0.0),
+        },
+        "construction": {
+            "profile": row.pop("planner_profile", "classic"),
+            "intent": row.pop("planner_intent", ""),
+            "phrase_protected": row.pop("phrase_protected", False),
+        },
+        "beat_grid": {
+            "grid_ms": row.pop("beat_grid_ms", 0),
+            "cell_index": row.pop("beat_grid_cell_index", -1),
+            "offset_ms": row.pop("beat_grid_offset_ms", 0),
         },
     }
     row["event_index"] = index
@@ -4406,8 +4806,10 @@ def build_audio_plan(
             "density": str(args.density),
             "sectional": bool(args.sectional),
             "section_arc": section_arc_name(args),
+            "planner_profile": planner_profile_name(args),
             "arrangement_style": str(args.arrangement_style),
             "source_score": source_score_mode(args),
+            "effective_source_score": effective_source_score_mode(args),
             "source_diversity": float(args.source_diversity),
             "source_manifest": str(getattr(args, "source_manifest", "") or ""),
             "source_manifest_matches": int(getattr(args, "source_manifest_matches", 0) or 0),
@@ -4438,6 +4840,8 @@ def build_audio_plan(
             "source_count": len({event.source for event in events}),
             "memory_event_count": sum(1 for event in events if event.from_memory),
             "cue_event_count": sum(1 for event in events if event.source_cue_end_ms > event.source_cue_start_ms),
+            "phrase_protected_event_count": sum(1 for event in events if event.phrase_protected),
+            "grid_aligned_event_count": sum(1 for event in events if event.beat_grid_ms > 0 and event.beat_grid_offset_ms == 0),
             "layer_counts": sorted_count_map(layer_counts),
             "section_counts": sorted_count_map(section_counts),
             "top_sources": top_count_rows(source_counts, limit=8),
@@ -4558,6 +4962,8 @@ def place_events(
         profile = workflow_audio_profile(profile, local_args)
 
         sec_name = str(profile["name"])
+        planner_name = planner_profile_name(local_args)
+        planner_intent = section_planner_intent(sec_name, planner_name)
         sec_span = plan.get(sec_name, (0, total_ms))
         memory_bias = local_args.recurrence_prob + (0.14 if sec_name in {"COLLAPSE", "AFTERIMAGE"} else (0.08 if sec_name == "PRESSURE" else 0.0))
         use_recurrence_fragment = bool(recurrence_memory and random.random() < clamp(memory_bias * (1.4 if sec_name in {"PRESSURE", "COLLAPSE"} else 1.0), 0.0, 0.97))
@@ -4567,6 +4973,8 @@ def place_events(
             sample, shaped, meta, _ = random.choice(list(recurrence_memory))
             from_memory = True
             selection_reason = "recurrence_fragment"
+            event_profile = dict(profile)
+            phrase_protected = bool(meta.get("phrase_protected", False))
             if random.random() < 0.34:
                 shaped = change_speed(shaped, random.choice([0.84, 0.92, 1.05, 1.16]))
             if random.random() < 0.38:
@@ -4596,20 +5004,30 @@ def place_events(
                     selection_reason = "similarity_neighbor"
                 elif beat_jump and beat_jump.fallbacks > before_fallbacks:
                     selection_reason = "weighted_source_fallback"
+            event_profile, phrase_protected = event_audio_profile(profile, local_args, sample)
             src = source_audio_for_sample(sample, local_args)
             if sample.has_cue() and str(getattr(local_args, "cue_slice_mode", "full")) == "full":
                 frag = src
             else:
-                frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(profile["frag_mul"]), grid_ms=grid_ms)
-            shaped, meta = shape_fragment(frag, profile, local_args)
+                frag = safe_slice_fragment(src, min_frag_ms, max_frag_ms, float(event_profile["frag_mul"]), grid_ms=grid_ms)
+            shaped, meta = shape_fragment(frag, event_profile, local_args)
+            meta = dict(meta)
+            meta["phrase_protected"] = phrase_protected
             if grid_ms > 0:
-                meta = dict(meta)
                 meta["transformation"] = f"{meta.get('transformation', 'slice')}+grid"
         recurrence_count[str(sample.path)] = recurrence_count.get(str(sample.path), 0) + 1
 
+        if planner_name == "phrase" and phrase_protected:
+            layer_weights = [7, 2, 1]
+        elif planner_name == "beat":
+            layer_weights = [2, 6, 2]
+        elif planner_name == "breach":
+            layer_weights = [2, 5, 4]
+        else:
+            layer_weights = [3, 4, 4] if profile["name"] in {"COLLAPSE", "AFTERIMAGE"} else ([4, 3, 3] if local_args.arrangement_style == "swarm" else [5, 2, 2])
         layer = random.choices(
             ["voice_main", "voice_cuts", "ghosts"],
-            weights=[3, 4, 4] if profile["name"] in {"COLLAPSE", "AFTERIMAGE"} else ([4, 3, 3] if local_args.arrangement_style == "swarm" else [5, 2, 2]),
+            weights=layer_weights,
             k=1,
         )[0]
         if random.random() < profile["ghost"]:
@@ -4631,6 +5049,11 @@ def place_events(
             else:
                 jitter = random.randint(-300, 820)
                 step = max(70, int(random.randint(350, 2200) / max(0.4, float(profile["dens"]))))
+        if planner_name == "phrase" and phrase_protected:
+            jitter = random.randint(80, 640)
+            step = max(step, len(shaped) + silence_duration_ms(local_args, (90, 320)))
+        elif planner_name == "beat" and grid_ms > 0:
+            step = max(grid_ms, quantize_to_grid(step, grid_ms) or grid_ms)
 
         pos = random.randint(0, 500) if i == 0 else max(0, current_anchor + jitter)
         if grid_ms > 0:
@@ -4713,13 +5136,15 @@ def place_events(
             source_counts=source_counts,
             recent_source_keys=list(recent_source_keys),
             previous_sample=previous_source_sample,
-            profile=profile,
+            profile=event_profile,
             reason=selection_reason,
         )
         previous_source_sample = sample
         source_counts[source_key] += 1
         recent_source_keys.append(source_key)
         rec_idx = recurrence_count[str(sample.path)]
+        beat_cell_index = int(pos // grid_ms) if grid_ms > 0 else -1
+        beat_offset_ms = int(pos % grid_ms) if grid_ms > 0 else 0
         events.append(
             Event(
                 layer=layer,
@@ -4751,6 +5176,12 @@ def place_events(
                 baseline_placement_original_start_ms=int(placement_info.get("original_start_ms", pos)),
                 baseline_placement_cell_index=int(placement_info.get("cell_index", -1)),
                 baseline_placement_cell_energy=float(placement_info.get("cell_energy", 0.0)),
+                planner_profile=planner_name,
+                planner_intent=planner_intent,
+                phrase_protected=phrase_protected,
+                beat_grid_ms=grid_ms,
+                beat_grid_cell_index=beat_cell_index,
+                beat_grid_offset_ms=beat_offset_ms,
                 **selection_debug,
             )
         )
@@ -4780,6 +5211,10 @@ def place_events(
                 source_diversity=local_args.source_diversity,
                 section_arc=section_arc_name(local_args),
                 source_score=source_score_mode(local_args),
+                planner_profile=planner_name,
+                planner_intent=planner_intent,
+                phrase_protected=phrase_protected,
+                beat_grid_cell_index=beat_cell_index,
                 baseline_placement=str(placement_info.get("mode", "any")),
                 baseline_cell_index=int(placement_info.get("cell_index", -1)),
                 baseline_cell_energy=float(placement_info.get("cell_energy", 0.0)),

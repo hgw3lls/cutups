@@ -11,22 +11,27 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shlex
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 tk: Any = None
 ttk: Any = None
+filedialog: Any = None
 
 
 def ensure_tk() -> None:
-    global tk, ttk
-    if tk is not None and ttk is not None:
+    global tk, ttk, filedialog
+    if tk is not None and ttk is not None and filedialog is not None:
         return
     try:
         import tkinter as tk_module
         from tkinter import ttk as ttk_module
+        from tkinter import filedialog as filedialog_module
     except ModuleNotFoundError as exc:
         raise SystemExit(
             "Tk GUI unavailable: this Python environment does not provide tkinter/_tkinter. "
@@ -34,6 +39,7 @@ def ensure_tk() -> None:
         ) from exc
     tk = tk_module
     ttk = ttk_module
+    filedialog = filedialog_module
 
 
 RANGES: Dict[str, Tuple[float, float, float]] = {
@@ -57,6 +63,7 @@ RANGES: Dict[str, Tuple[float, float, float]] = {
 SECTION_ARCS = ["classic", "spoken", "breach", "pulse", "ghost"]
 SOURCE_SCORES = ["off", "spoken", "beat", "breach"]
 BASELINE_PLACEMENTS = ["any", "accent", "gap", "offbeat"]
+SLICE_GRIDS = ["off", "1/4", "1/8", "1/16", "1/32", "1/8t", "1/16t"]
 
 
 def format_eta(seconds: object) -> str:
@@ -68,6 +75,55 @@ def format_eta(seconds: object) -> str:
     if hours:
         return f"{hours:d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
+
+def cutup_script_path() -> Path:
+    return Path(__file__).resolve().with_name("cutup.py")
+
+
+def build_render_command(
+    python_executable: str,
+    script_path: Path,
+    input_path: str,
+    output_path: str,
+    preset: str,
+    duration: str,
+    control_file: Path,
+    telemetry_file: Path,
+    bpm: str = "",
+    slice_grid: str = "off",
+    baseline_beat: str = "",
+) -> List[str]:
+    cmd = [
+        python_executable,
+        str(script_path),
+        "--mode",
+        "audio",
+        "--input",
+        input_path,
+        "--output",
+        output_path,
+        "--duration",
+        duration,
+        "--preview-duration",
+        "10",
+        "--live-control-file",
+        str(control_file),
+        "--live-telemetry-jsonl",
+        str(telemetry_file),
+        "--live-control-poll-ms",
+        "120",
+    ]
+    if preset and preset != "Default":
+        cmd.extend(["--preset", preset])
+    if bpm.strip() and bpm.strip() not in {"0", "0.0"}:
+        cmd.extend(["--bpm", bpm.strip()])
+    if slice_grid and slice_grid != "off":
+        cmd.extend(["--slice-grid", slice_grid])
+    if baseline_beat.strip():
+        cmd.extend(["--baseline-beat", baseline_beat.strip()])
+    return cmd
+
 
 PRESETS: Dict[str, Dict[str, object]] = {
     "Default": {k: v[2] for k, v in RANGES.items()},
@@ -215,6 +271,14 @@ class ControlGUI:
     progress_var: tk.DoubleVar
     progress_text_var: tk.StringVar
     progress_detail_var: tk.StringVar
+    input_var: tk.StringVar
+    output_var: tk.StringVar
+    render_preset_var: tk.StringVar
+    duration_var: tk.StringVar
+    bpm_var: tk.StringVar
+    slice_grid_var: tk.StringVar
+    baseline_var: tk.StringVar
+    command_box: tk.Text
     last_payload: Dict[str, object]
     section_var: tk.StringVar
     filter_var: tk.StringVar
@@ -224,6 +288,8 @@ class ControlGUI:
     hold_var: tk.BooleanVar
     burst_var: tk.BooleanVar
     panic_var: tk.BooleanVar
+    render_process: Optional[subprocess.Popen] = None
+    render_log_handle: Any = None
 
     @staticmethod
     def _atomic_write(path: Path, text: str) -> None:
@@ -280,6 +346,91 @@ class ControlGUI:
             self.progress_detail_var.set(f"Telemetry unavailable: {exc}")
         self.root.after(500, self.poll_telemetry)
 
+    def current_render_command(self) -> List[str]:
+        return build_render_command(
+            sys.executable,
+            cutup_script_path(),
+            self.input_var.get().strip() or "./samples",
+            self.output_var.get().strip() or "out/gui_render",
+            self.render_preset_var.get().strip(),
+            self.duration_var.get().strip() or "45",
+            self.control_file,
+            self.telemetry_file,
+            bpm=self.bpm_var.get().strip(),
+            slice_grid=self.slice_grid_var.get().strip() or "off",
+            baseline_beat=self.baseline_var.get().strip(),
+        )
+
+    def update_command_preview(self, *_: object) -> None:
+        command = " ".join(shlex.quote(part) for part in self.current_render_command())
+        self.command_box.configure(state="normal")
+        self.command_box.delete("1.0", tk.END)
+        self.command_box.insert("1.0", command)
+        self.command_box.configure(state="disabled")
+
+    def choose_input(self) -> None:
+        chosen = filedialog.askdirectory(title="Choose audio source folder")
+        if chosen:
+            self.input_var.set(chosen)
+
+    def choose_output(self) -> None:
+        chosen = filedialog.askdirectory(title="Choose output folder")
+        if chosen:
+            self.output_var.set(chosen)
+
+    def choose_baseline(self) -> None:
+        chosen = filedialog.askopenfilename(title="Choose baseline beat", filetypes=[("Audio files", "*.wav *.mp3 *.flac *.aiff *.ogg *.m4a"), ("All files", "*.*")])
+        if chosen:
+            self.baseline_var.set(chosen)
+
+    def start_render(self) -> None:
+        if self.render_process and self.render_process.poll() is None:
+            self.status_var.set("Render already running")
+            return
+        self.write_payload()
+        self.progress_var.set(0.0)
+        self.progress_text_var.set("  0.0%  starting  ETA --:--")
+        self.progress_detail_var.set(f"Telemetry: {self.telemetry_file}")
+        self.telemetry_pos = 0
+        self.telemetry_file.parent.mkdir(parents=True, exist_ok=True)
+        self.telemetry_file.write_text("", encoding="utf-8")
+        log_path = self.telemetry_file.with_suffix(".log")
+        self.render_log_handle = log_path.open("w", encoding="utf-8")
+        cmd = self.current_render_command()
+        try:
+            self.render_process = subprocess.Popen(
+                cmd,
+                cwd=str(cutup_script_path().parents[1]),
+                stdout=self.render_log_handle,
+                stderr=subprocess.STDOUT,
+            )
+        except OSError as exc:
+            self.render_log_handle.close()
+            self.render_log_handle = None
+            self.status_var.set(f"Render failed to start: {exc}")
+            return
+        self.status_var.set(f"Render running. Log: {log_path}")
+        self.root.after(500, self.poll_render)
+
+    def stop_render(self) -> None:
+        if self.render_process and self.render_process.poll() is None:
+            self.render_process.terminate()
+            self.status_var.set("Stopping render")
+        else:
+            self.status_var.set("No render is running")
+
+    def poll_render(self) -> None:
+        if not self.render_process:
+            return
+        code = self.render_process.poll()
+        if code is None:
+            self.root.after(500, self.poll_render)
+            return
+        if self.render_log_handle:
+            self.render_log_handle.close()
+            self.render_log_handle = None
+        self.status_var.set("Render complete" if code == 0 else f"Render exited with code {code}")
+
     def apply_preset(self, preset_name: str) -> None:
         data = PRESETS.get(preset_name, PRESETS["Default"])
         for key, var in self.vars.items():
@@ -310,7 +461,7 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("700x840")
+    root.geometry("780x1040")
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill=tk.BOTH, expand=True)
@@ -325,6 +476,12 @@ def main() -> None:
     progress_var = tk.DoubleVar(value=0.0)
     progress_text_var = tk.StringVar(value="  0.0%  waiting  ETA --:--")
     progress_detail_var = tk.StringVar(value=f"Telemetry: {telemetry_file}")
+    input_var = tk.StringVar(value="./samples")
+    output_var = tk.StringVar(value="out/gui_render")
+    duration_var = tk.StringVar(value="45")
+    bpm_var = tk.StringVar(value="")
+    slice_grid_var = tk.StringVar(value="off")
+    baseline_var = tk.StringVar(value="")
 
     preset_row = ttk.Frame(frame)
     preset_row.pack(fill=tk.X, pady=(0, 8))
@@ -342,6 +499,7 @@ def main() -> None:
     hold_var = tk.BooleanVar(value=False)
     burst_var = tk.BooleanVar(value=False)
     panic_var = tk.BooleanVar(value=False)
+    command_box = tk.Text(frame, height=3, wrap="word")
     gui = ControlGUI(
         root=root,
         control_file=control_file,
@@ -352,6 +510,14 @@ def main() -> None:
         progress_var=progress_var,
         progress_text_var=progress_text_var,
         progress_detail_var=progress_detail_var,
+        input_var=input_var,
+        output_var=output_var,
+        render_preset_var=preset_var,
+        duration_var=duration_var,
+        bpm_var=bpm_var,
+        slice_grid_var=slice_grid_var,
+        baseline_var=baseline_var,
+        command_box=command_box,
         last_payload={},
         section_var=section_var,
         filter_var=filter_var,
@@ -423,6 +589,38 @@ def main() -> None:
     ttk.Checkbutton(conductor, text="Burst now", variable=burst_var, command=gui.write_payload).grid(row=1, column=0, sticky="w", pady=(6, 0))
     ttk.Checkbutton(conductor, text="Panic silence", variable=panic_var, command=gui.write_payload).grid(row=1, column=1, sticky="w", pady=(6, 0))
 
+    render_frame = ttk.LabelFrame(frame, text="Render launcher", padding=8)
+    render_frame.pack(fill=tk.X, pady=(8, 8))
+
+    ttk.Label(render_frame, text="Input").grid(row=0, column=0, sticky="w")
+    ttk.Entry(render_frame, textvariable=input_var).grid(row=0, column=1, sticky="ew", padx=(8, 8))
+    ttk.Button(render_frame, text="Choose", command=gui.choose_input).grid(row=0, column=2, sticky="e")
+
+    ttk.Label(render_frame, text="Output").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=output_var).grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
+    ttk.Button(render_frame, text="Choose", command=gui.choose_output).grid(row=1, column=2, sticky="e", pady=(6, 0))
+
+    ttk.Label(render_frame, text="Duration").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=duration_var, width=10).grid(row=2, column=1, sticky="w", padx=(8, 8), pady=(6, 0))
+    ttk.Label(render_frame, text="BPM").grid(row=2, column=1, sticky="w", padx=(96, 0), pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=bpm_var, width=10).grid(row=2, column=1, sticky="w", padx=(136, 0), pady=(6, 0))
+    ttk.Label(render_frame, text="Grid").grid(row=2, column=1, sticky="w", padx=(224, 0), pady=(6, 0))
+    ttk.Combobox(render_frame, values=SLICE_GRIDS, textvariable=slice_grid_var, state="readonly", width=8).grid(row=2, column=1, sticky="w", padx=(264, 0), pady=(6, 0))
+
+    ttk.Label(render_frame, text="Baseline").grid(row=3, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=baseline_var).grid(row=3, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
+    ttk.Button(render_frame, text="Choose", command=gui.choose_baseline).grid(row=3, column=2, sticky="e", pady=(6, 0))
+    render_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=4, column=0, sticky="nw", pady=(8, 0))
+    command_box.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
+    command_box.configure(state="disabled")
+
+    launch_row = ttk.Frame(render_frame)
+    launch_row.grid(row=5, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    ttk.Button(launch_row, text="Start render", command=gui.start_render).pack(side=tk.LEFT)
+    ttk.Button(launch_row, text="Stop", command=gui.stop_render).pack(side=tk.LEFT, padx=(8, 0))
+
     progress_frame = ttk.LabelFrame(frame, text="Render progress", padding=8)
     progress_frame.pack(fill=tk.X, pady=(8, 8))
     progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=100.0)
@@ -430,23 +628,16 @@ def main() -> None:
     ttk.Label(progress_frame, textvariable=progress_text_var).pack(anchor="w", pady=(4, 0))
     ttk.Label(progress_frame, textvariable=progress_detail_var).pack(anchor="w")
 
-    cmd = (
-        f"python PY/cutup.py --mode both --input ./samples --sectional "
-        f"--live-control-file {control_file} --live-telemetry-jsonl {telemetry_file} --live-control-poll-ms 120"
-    )
-    ttk.Label(frame, text="Run cutup with:", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(8, 2))
-    cmd_box = tk.Text(frame, height=2, wrap="word")
-    cmd_box.insert("1.0", cmd)
-    cmd_box.configure(state="disabled")
-    cmd_box.pack(fill=tk.X)
-
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(10, 0))
 
     preset_combo.bind("<<ComboboxSelected>>", lambda _e: gui.apply_preset(preset_var.get()))
     sec_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
+    for var in (input_var, output_var, preset_var, duration_var, bpm_var, slice_grid_var, baseline_var):
+        var.trace_add("write", gui.update_command_preview)
 
     gui.write_payload()
+    gui.update_command_preview()
     gui.poll_telemetry()
     root.mainloop()
 

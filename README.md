@@ -88,6 +88,15 @@ Print a copy-ready command recipe:
 cutups --show-recipe beat-similarity
 ```
 
+Scan an audio folder and generate a starter manifest:
+
+```bash
+cutups \
+  --scan-dataset ./samples \
+  --write-source-manifest ./samples/source_manifest.csv \
+  --write-dataset-report ./samples/dataset_report.json
+```
+
 Check local dependencies:
 
 ```bash
@@ -114,7 +123,7 @@ python3 PY/cutup.py --mode audio --preset signal-breach --input ./samples --outp
 
 See [TRANSMISSIONS_QUICKSTART.md](TRANSMISSIONS_QUICKSTART.md) for signal-breach, spoken-word, beat-cutup, radio-intrusion, hard-stutter, and ghost-transmission recipes. See [docs/MANUAL_QA.md](docs/MANUAL_QA.md) for repeatable listening checks after changes.
 
-Recipe names for `--show-recipe` include `qa-sources`, `signal-breach`, `spoken-word-cutup`, `spoken-word-cues`, `beat-cutup`, `beat-similarity`, `radio-intrusion`, `hard-stutter`, `ghost-transmission`, and `all`.
+Recipe names for `--show-recipe` include `qa-sources`, `scan-dataset`, `signal-breach`, `spoken-word-cutup`, `spoken-word-cues`, `beat-cutup`, `beat-baseline`, `beat-similarity`, `radio-intrusion`, `hard-stutter`, `ghost-transmission`, and `all`.
 
 Available preset names:
 
@@ -157,7 +166,11 @@ Use `--source-score off|spoken|beat|breach` to bias source choice toward the mat
 
 Use `--source-manifest ./sources.csv` or `--source-manifest ./sources.json` to label mixed datasets explicitly. A CSV can include `file`, `role`, `tags`, `intensity`, `loop_hint`, `words`, and `weight`; those labels feed source scoring, plan diagnostics, and the analysis cache.
 
+Use `--scan-dataset ./samples --write-source-manifest ./samples/source_manifest.csv` to create a starter manifest from local audio. The scan uses `pydub` plus filename and lightweight signal descriptors to infer rough `spoken`, `beat`, `breach`, or `texture` roles. Treat the output as editable prep, not ground truth.
+
 Use `--section-arc classic|spoken|breach|pulse|ghost` with `--sectional` to choose the render's energy curve. Presets set workflow-specific arcs, and each `cutup_XX_plan.json` records the selected arc plus per-section target probabilities.
+
+Use `--planner-profile auto|classic|phrase|beat|breach` to bias construction above raw parameter values. `auto` follows the preset/source score. `phrase` protects cued or spoken sources from heavy reversal/granular damage, `beat` favors rhythmic layers and grid diagnostics, and `breach` pushes cuts, filtering, noise, and ghost layers.
 
 Use subtitle or cue files to cut on phrase boundaries:
 
@@ -374,6 +387,8 @@ The GUI provides:
 - continuous slider control for all current live-override keys
 - conductor controls: force section, hold section, burst-now, panic-silence
 - one-click presets (`Default`, `Bureaucratic Pressure`, `Ghost Broadcast`, `Collapse Ritual`)
+- input/output/baseline selectors and Start/Stop render buttons for local audio renders
+- command preview plus progress/ETA from the matching telemetry JSONL file
 - immediate JSON writes compatible with `cutup.py` live polling
 
 ---
@@ -394,9 +409,9 @@ Inside your `--output` directory you will usually see:
 - `audio_analysis_cache.json` (when `--analysis-cache auto` is set)
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
 
-When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`, `source_cue_end_ms`, and `source_cue_text`. The event CSV also includes flat planner diagnostics such as `selection_reason`, `source_final_weight`, and section target values for quick spreadsheet review.
+When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`, `source_cue_end_ms`, and `source_cue_text`. The event CSV also includes flat planner diagnostics such as `selection_reason`, `source_final_weight`, `planner_profile`, `phrase_protected`, `beat_grid_cell_index`, and section target values for quick spreadsheet review.
 
-`cutup_XX_plan.json` records the rendered composition plan: section windows, event ordering, source/layer/transform summaries, cue counts, and the render settings used for the variant. Each event includes a nested `planner` block explaining the selection reason, source weight components, diversity penalties, and section targets. This is the inspection surface for tuning smarter cutup construction.
+`cutup_XX_plan.json` records the rendered composition plan: section windows, event ordering, source/layer/transform summaries, cue counts, phrase-protected counts, grid diagnostics, and the render settings used for the variant. Each event includes a nested `planner` block explaining the selection reason, source weight components, diversity penalties, construction profile/intent, beat-grid placement, baseline placement, and section targets. This is the inspection surface for tuning smarter cutup construction.
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
 
