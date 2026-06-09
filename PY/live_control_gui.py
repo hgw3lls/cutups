@@ -278,7 +278,7 @@ class ControlGUI:
     bpm_var: tk.StringVar
     slice_grid_var: tk.StringVar
     baseline_var: tk.StringVar
-    command_box: tk.Text
+    command_box: Any
     last_payload: Dict[str, object]
     section_var: tk.StringVar
     filter_var: tk.StringVar
@@ -362,6 +362,8 @@ class ControlGUI:
         )
 
     def update_command_preview(self, *_: object) -> None:
+        if self.command_box is None:
+            return
         command = " ".join(shlex.quote(part) for part in self.current_render_command())
         self.command_box.configure(state="normal")
         self.command_box.delete("1.0", tk.END)
@@ -499,7 +501,6 @@ def main() -> None:
     hold_var = tk.BooleanVar(value=False)
     burst_var = tk.BooleanVar(value=False)
     panic_var = tk.BooleanVar(value=False)
-    command_box = tk.Text(frame, height=3, wrap="word")
     gui = ControlGUI(
         root=root,
         control_file=control_file,
@@ -517,7 +518,7 @@ def main() -> None:
         bpm_var=bpm_var,
         slice_grid_var=slice_grid_var,
         baseline_var=baseline_var,
-        command_box=command_box,
+        command_box=None,
         last_payload={},
         section_var=section_var,
         filter_var=filter_var,
@@ -613,6 +614,8 @@ def main() -> None:
     render_frame.columnconfigure(1, weight=1)
 
     ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=4, column=0, sticky="nw", pady=(8, 0))
+    command_box = tk.Text(render_frame, height=3, wrap="word")
+    gui.command_box = command_box
     command_box.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
     command_box.configure(state="disabled")
 
