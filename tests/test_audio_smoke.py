@@ -124,6 +124,10 @@ class AudioSmokeTests(unittest.TestCase):
                     "1",
                     "--baseline-beat-gain",
                     "-12",
+                    "--baseline-beat-duck-db",
+                    "4",
+                    "--baseline-beat-duck-ms",
+                    "75",
                     "--slice-grid",
                     "1/16",
                     "--beat-jump-mode",
@@ -200,6 +204,9 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["config"]["baseline_beat"], str(baseline.resolve()))
             self.assertEqual(render_plan["config"]["baseline_beat_gain"], -12.0)
             self.assertEqual(render_plan["config"]["baseline_beat_bars"], 1.0)
+            self.assertEqual(render_plan["config"]["baseline_beat_duck_db"], 4.0)
+            self.assertEqual(render_plan["config"]["baseline_beat_duck_ms"], 75)
+            self.assertGreaterEqual(render_plan["config"]["baseline_beat_duck_windows"], 1)
             self.assertEqual(render_plan["config"]["baseline_beat_source_duration_ms"], 2000)
             self.assertEqual(render_plan["config"]["baseline_beat_inferred_bpm"], 120.0)
             self.assertEqual(render_plan["config"]["bpm"], 120.0)

@@ -452,6 +452,7 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
         "  --baseline-beat ../cutups_qa_sources/loops/drum_pulse_120.wav \\\n"
         "  --baseline-beat-bars 4 \\\n"
         "  --baseline-beat-gain -10 \\\n"
+        "  --baseline-beat-duck-db 4 \\\n"
         "  --slice-grid 1/16 \\\n"
         "  --stutter-rate 0.45 \\\n"
         "  --repeat-rate 0.30 \\\n"
@@ -862,6 +863,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--baseline-beat", default="", help="Optional beat/loop audio file to use as a continuous timing bed; it is not added to the cutup source pool.")
     p.add_argument("--baseline-beat-gain", type=float, default=-9.0, help="Gain in dB applied to the baseline beat bed before mixing.")
     p.add_argument("--baseline-beat-bars", type=float, default=0.0, help="If >0 and --bpm is unset, infer BPM from the baseline beat length as this many 4/4 bars.")
+    p.add_argument("--baseline-beat-duck-db", type=float, default=0.0, help="Positive dB attenuation applied to the baseline beat around cutup events; 0 disables.")
+    p.add_argument("--baseline-beat-duck-ms", type=int, default=80, help="Padding in milliseconds around cutup events for baseline beat ducking.")
     p.add_argument("--min-frag", type=float, default=0.05, help="Minimum fragment size in seconds.")
     p.add_argument("--max-frag", type=float, default=4.2, help="Maximum fragment size in seconds.")
     p.add_argument("--phrase-length", choices=sorted(PHRASE_LENGTH_RANGES), default="auto", help="Voice-oriented fragment length profile.")
@@ -1084,10 +1087,16 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
             raise SystemExit(f"--baseline-beat must be an audio file: {baseline_path}")
     elif args.baseline_beat_bars > 0:
         raise SystemExit("--baseline-beat-bars requires --baseline-beat")
+    elif args.baseline_beat_duck_db > 0:
+        raise SystemExit("--baseline-beat-duck-db requires --baseline-beat")
     if not math.isfinite(float(args.baseline_beat_gain)):
         raise SystemExit("--baseline-beat-gain must be a finite dB value")
     if args.baseline_beat_bars < 0:
         raise SystemExit("--baseline-beat-bars must be >= 0")
+    if not math.isfinite(float(args.baseline_beat_duck_db)) or args.baseline_beat_duck_db < 0:
+        raise SystemExit("--baseline-beat-duck-db must be a finite value >= 0")
+    if args.baseline_beat_duck_ms < 0:
+        raise SystemExit("--baseline-beat-duck-ms must be >= 0")
     if args.bpm < 0:
         raise SystemExit("--bpm must be >= 0")
     if args.bpm and not 20 <= args.bpm <= 300:
@@ -1862,6 +1871,10 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     if args.baseline_beat:
         print(f"baseline_beat: {Path(args.baseline_beat).expanduser().resolve()}")
         print(f"baseline_beat_gain: {args.baseline_beat_gain:.2f} dB")
+        if args.baseline_beat_duck_db > 0:
+            print(f"baseline_beat_ducking: {args.baseline_beat_duck_db:.2f} dB over {args.baseline_beat_duck_ms} ms")
+        else:
+            print("baseline_beat_ducking: off")
         if args.baseline_beat_bars > 0 and args.bpm <= 0:
             print(f"baseline_beat_bpm: infer during render from {args.baseline_beat_bars:g} bar(s)")
         elif args.baseline_beat_bars > 0:
@@ -3587,6 +3600,47 @@ def render_baseline_beat_bed(baseline: BaselineBeat, total_ms: int) -> AudioSegm
     return (baseline.audio * loops)[:total_ms].apply_gain(baseline.gain_db)
 
 
+def baseline_duck_windows(events: List[Event], total_ms: int, duck_ms: int) -> List[Tuple[int, int]]:
+    if total_ms <= 0 or duck_ms < 0:
+        return []
+    intervals: List[Tuple[int, int]] = []
+    for event in events:
+        start = max(0, int(event.start_ms) - duck_ms)
+        end = min(total_ms, int(event.end_ms) + duck_ms)
+        if end > start:
+            intervals.append((start, end))
+    if not intervals:
+        return []
+    intervals.sort()
+    merged: List[Tuple[int, int]] = []
+    for start, end in intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            prev_start, prev_end = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end))
+    return merged
+
+
+def duck_baseline_beat_bed(bed: AudioSegment, events: List[Event], duck_db: float, duck_ms: int) -> Tuple[AudioSegment, int]:
+    amount = float(duck_db or 0.0)
+    if amount <= 0 or len(bed) <= 0:
+        return bed, 0
+    windows = baseline_duck_windows(events, len(bed), max(0, int(duck_ms)))
+    if not windows:
+        return bed, 0
+    out = AudioSegment.silent(duration=0, frame_rate=bed.frame_rate)
+    cursor = 0
+    for start, end in windows:
+        if start > cursor:
+            out += bed[cursor:start]
+        out += bed[start:end].apply_gain(-amount)
+        cursor = end
+    if cursor < len(bed):
+        out += bed[cursor:]
+    return out[: len(bed)], len(windows)
+
+
 def change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
     if abs(speed - 1.0) < 1e-6:
         return audio
@@ -4010,6 +4064,9 @@ def build_audio_plan(
             "baseline_beat": str(baseline_beat_path(args) or ""),
             "baseline_beat_gain": float(getattr(args, "baseline_beat_gain", -9.0)),
             "baseline_beat_bars": float(getattr(args, "baseline_beat_bars", 0.0)),
+            "baseline_beat_duck_db": float(getattr(args, "baseline_beat_duck_db", 0.0)),
+            "baseline_beat_duck_ms": int(getattr(args, "baseline_beat_duck_ms", 80)),
+            "baseline_beat_duck_windows": int(getattr(args, "baseline_beat_duck_windows", 0) or 0),
             "baseline_beat_source_duration_ms": int(getattr(args, "baseline_beat_source_duration_ms", 0) or 0),
             "baseline_beat_inferred_bpm": float(getattr(args, "baseline_beat_inferred_bpm", 0.0) or 0.0),
             "sample_rate": int(args.sample_rate),
@@ -4377,6 +4434,15 @@ def build_variant(
     main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms, live=live, beat_jump=beat_jump)
     hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
     baseline_bed = render_baseline_beat_bed(baseline_beat, total_ms) if baseline_beat else None
+    baseline_duck_count = 0
+    if baseline_bed is not None:
+        baseline_bed, baseline_duck_count = duck_baseline_beat_bed(
+            baseline_bed,
+            events,
+            float(getattr(args, "baseline_beat_duck_db", 0.0) or 0.0),
+            int(getattr(args, "baseline_beat_duck_ms", 80) or 0),
+        )
+    setattr(args, "baseline_beat_duck_windows", baseline_duck_count)
 
     master = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     master = master.overlay(hiss, position=0)

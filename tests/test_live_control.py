@@ -138,6 +138,9 @@ class LiveControlTests(unittest.TestCase):
             baseline_beat=baseline_path,
             baseline_beat_gain=-12.0,
             baseline_beat_bars=2.0,
+            baseline_beat_duck_db=4.0,
+            baseline_beat_duck_ms=90,
+            baseline_beat_duck_windows=3,
             baseline_beat_source_duration_ms=4000,
             baseline_beat_inferred_bpm=120.0,
             sample_rate=44100,
@@ -160,6 +163,9 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["config"]["baseline_beat"], baseline_path)
         self.assertEqual(plan["config"]["baseline_beat_gain"], -12.0)
         self.assertEqual(plan["config"]["baseline_beat_bars"], 2.0)
+        self.assertEqual(plan["config"]["baseline_beat_duck_db"], 4.0)
+        self.assertEqual(plan["config"]["baseline_beat_duck_ms"], 90)
+        self.assertEqual(plan["config"]["baseline_beat_duck_windows"], 3)
         self.assertEqual(plan["config"]["baseline_beat_source_duration_ms"], 4000)
         self.assertEqual(plan["config"]["baseline_beat_inferred_bpm"], 120.0)
         self.assertEqual(plan["config"]["source_manifest"], "")
@@ -183,6 +189,63 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(cutup.baseline_beat_bpm_from_duration(2000, 1), 120.0)
         self.assertEqual(cutup.baseline_beat_bpm_from_duration(0, 4), 0.0)
         self.assertEqual(cutup.baseline_beat_bpm_from_duration(8000, 0), 0.0)
+
+    def test_baseline_duck_windows_merge_event_ranges(self) -> None:
+        first = cutup.Event(
+            layer="voice_main",
+            section="BUILD",
+            source="/tmp/a.wav",
+            source_basename="a.wav",
+            source_duration_ms=1000,
+            source_cue_start_ms=0,
+            source_cue_end_ms=0,
+            source_cue_text="",
+            source_manifest_tags="",
+            source_manifest_role="",
+            source_manifest_weight=1.0,
+            start_ms=100,
+            end_ms=220,
+            fragment_duration_ms=120,
+            gain_db=-4.0,
+            reversed=False,
+            speed=1.0,
+            repeated=1,
+            hp_hz=0,
+            lp_hz=0,
+            grain_mode=False,
+            from_memory=False,
+            transformation="slice",
+            layer_role="foreground",
+            recurrence_index=1,
+        )
+        second = cutup.Event(
+            layer="voice_cuts",
+            section="BUILD",
+            source="/tmp/b.wav",
+            source_basename="b.wav",
+            source_duration_ms=1000,
+            source_cue_start_ms=0,
+            source_cue_end_ms=0,
+            source_cue_text="",
+            source_manifest_tags="",
+            source_manifest_role="",
+            source_manifest_weight=1.0,
+            start_ms=260,
+            end_ms=340,
+            fragment_duration_ms=80,
+            gain_db=-5.0,
+            reversed=False,
+            speed=1.0,
+            repeated=1,
+            hp_hz=0,
+            lp_hz=0,
+            grain_mode=False,
+            from_memory=False,
+            transformation="slice",
+            layer_role="rhythmic",
+            recurrence_index=1,
+        )
+        self.assertEqual(cutup.baseline_duck_windows([first, second], total_ms=1000, duck_ms=50), [(50, 390)])
 
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:
