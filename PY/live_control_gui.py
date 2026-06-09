@@ -129,6 +129,30 @@ def build_render_command(
     return cmd
 
 
+def make_scrollable_frame(parent: Any) -> Tuple[Any, Any]:
+    container = ttk.Frame(parent)
+    canvas = tk.Canvas(container, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    inner = ttk.Frame(canvas, padding=12)
+    window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    def update_scrollregion(_: object) -> None:
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def update_inner_width(event: object) -> None:
+        width = getattr(event, "width", 0)
+        if width:
+            canvas.itemconfigure(window_id, width=width)
+
+    inner.bind("<Configure>", update_scrollregion)
+    canvas.bind("<Configure>", update_inner_width)
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    container.pack(fill=tk.BOTH, expand=True)
+    return container, inner
+
+
 PRESETS: Dict[str, Dict[str, object]] = {
     "Default": {k: v[2] for k, v in RANGES.items()},
     "signal-breach": {
@@ -405,7 +429,7 @@ class ControlGUI:
 
     def open_track(self) -> None:
         raw = self.track_path_var.get().strip()
-        if not raw or raw == "Track: waiting":
+        if not raw or raw in {"Track: waiting", "Waiting for first chunk"}:
             self.status_var.set("No semi-live track available yet")
             return
         path = Path(raw)
@@ -430,7 +454,7 @@ class ControlGUI:
         self.progress_var.set(0.0)
         self.progress_text_var.set("  0.0%  starting  ETA --:--")
         self.progress_detail_var.set(f"Telemetry: {self.telemetry_file}")
-        self.track_path_var.set("Track: waiting")
+        self.track_path_var.set("Waiting for first chunk")
         self.telemetry_pos = 0
         self.telemetry_file.parent.mkdir(parents=True, exist_ok=True)
         self.telemetry_file.write_text("", encoding="utf-8")
@@ -501,10 +525,10 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("780x1040")
+    root.geometry("980x760")
+    root.minsize(760, 560)
 
-    frame = ttk.Frame(root, padding=12)
-    frame.pack(fill=tk.BOTH, expand=True)
+    _scroll_container, frame = make_scrollable_frame(root)
 
     ttk.Label(frame, text="cutup.py realtime control", font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
     ttk.Label(
@@ -524,7 +548,7 @@ def main() -> None:
     baseline_var = tk.StringVar(value="")
     semi_live_var = tk.BooleanVar(value=True)
     chunk_sec_var = tk.StringVar(value="8")
-    track_path_var = tk.StringVar(value="Track: waiting")
+    track_path_var = tk.StringVar(value="Waiting for first chunk")
 
     preset_row = ttk.Frame(frame)
     preset_row.pack(fill=tk.X, pady=(0, 8))
@@ -573,6 +597,63 @@ def main() -> None:
         burst_var=burst_var,
         panic_var=panic_var,
     )
+
+    render_frame = ttk.LabelFrame(frame, text="Render launcher", padding=8)
+    render_frame.pack(fill=tk.X, pady=(8, 8))
+
+    ttk.Label(render_frame, text="Input").grid(row=0, column=0, sticky="w")
+    ttk.Entry(render_frame, textvariable=input_var).grid(row=0, column=1, sticky="ew", padx=(8, 8))
+    ttk.Button(render_frame, text="Choose", command=gui.choose_input).grid(row=0, column=2, sticky="e")
+
+    ttk.Label(render_frame, text="Output").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=output_var).grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
+    ttk.Button(render_frame, text="Choose", command=gui.choose_output).grid(row=1, column=2, sticky="e", pady=(6, 0))
+
+    timing_row = ttk.Frame(render_frame)
+    timing_row.grid(row=2, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(6, 0))
+    ttk.Label(render_frame, text="Timing").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    ttk.Label(timing_row, text="Duration").pack(side=tk.LEFT)
+    ttk.Entry(timing_row, textvariable=duration_var, width=10).pack(side=tk.LEFT, padx=(4, 14))
+    ttk.Label(timing_row, text="BPM").pack(side=tk.LEFT)
+    ttk.Entry(timing_row, textvariable=bpm_var, width=10).pack(side=tk.LEFT, padx=(4, 14))
+    ttk.Label(timing_row, text="Grid").pack(side=tk.LEFT)
+    ttk.Combobox(timing_row, values=SLICE_GRIDS, textvariable=slice_grid_var, state="readonly", width=8).pack(side=tk.LEFT, padx=(4, 0))
+
+    ttk.Label(render_frame, text="Baseline").grid(row=3, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=baseline_var).grid(row=3, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
+    ttk.Button(render_frame, text="Choose", command=gui.choose_baseline).grid(row=3, column=2, sticky="e", pady=(6, 0))
+    render_frame.columnconfigure(1, weight=1)
+
+    semi_live_row = ttk.Frame(render_frame)
+    semi_live_row.grid(row=4, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    ttk.Checkbutton(semi_live_row, text="Semi-live track", variable=semi_live_var, command=gui.update_command_preview).pack(side=tk.LEFT)
+    ttk.Label(semi_live_row, text="Chunk sec").pack(side=tk.LEFT, padx=(16, 4))
+    ttk.Entry(semi_live_row, textvariable=chunk_sec_var, width=8).pack(side=tk.LEFT)
+
+    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=5, column=0, sticky="nw", pady=(8, 0))
+    command_box = tk.Text(render_frame, height=3, wrap="word")
+    gui.command_box = command_box
+    command_box.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
+    command_box.configure(state="disabled")
+
+    launch_row = ttk.Frame(render_frame)
+    launch_row.grid(row=6, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    ttk.Button(launch_row, text="Start render", command=gui.start_render).pack(side=tk.LEFT)
+    ttk.Button(launch_row, text="Stop", command=gui.stop_render).pack(side=tk.LEFT, padx=(8, 0))
+
+    progress_frame = ttk.LabelFrame(frame, text="Render progress / playable track", padding=8)
+    progress_frame.pack(fill=tk.X, pady=(8, 8))
+    progress_frame.columnconfigure(1, weight=1)
+    progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=100.0)
+    progress_bar.grid(row=0, column=0, columnspan=3, sticky="ew")
+    ttk.Label(progress_frame, textvariable=progress_text_var).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+    ttk.Label(progress_frame, textvariable=progress_detail_var).grid(row=2, column=0, columnspan=3, sticky="w")
+    ttk.Label(progress_frame, text="Playable track").grid(row=3, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(progress_frame, textvariable=track_path_var, state="readonly").grid(row=3, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
+    ttk.Button(progress_frame, text="Open track", command=gui.open_track).grid(row=3, column=2, sticky="e", pady=(6, 0))
+
+    status = ttk.Label(frame, textvariable=status_var)
+    status.pack(anchor="w", pady=(2, 10))
 
     def on_slide(_: str = "") -> None:
         gui.write_payload()
@@ -633,58 +714,6 @@ def main() -> None:
     ttk.Checkbutton(conductor, text="Hold section", variable=hold_var, command=gui.write_payload).grid(row=0, column=2, sticky="w")
     ttk.Checkbutton(conductor, text="Burst now", variable=burst_var, command=gui.write_payload).grid(row=1, column=0, sticky="w", pady=(6, 0))
     ttk.Checkbutton(conductor, text="Panic silence", variable=panic_var, command=gui.write_payload).grid(row=1, column=1, sticky="w", pady=(6, 0))
-
-    render_frame = ttk.LabelFrame(frame, text="Render launcher", padding=8)
-    render_frame.pack(fill=tk.X, pady=(8, 8))
-
-    ttk.Label(render_frame, text="Input").grid(row=0, column=0, sticky="w")
-    ttk.Entry(render_frame, textvariable=input_var).grid(row=0, column=1, sticky="ew", padx=(8, 8))
-    ttk.Button(render_frame, text="Choose", command=gui.choose_input).grid(row=0, column=2, sticky="e")
-
-    ttk.Label(render_frame, text="Output").grid(row=1, column=0, sticky="w", pady=(6, 0))
-    ttk.Entry(render_frame, textvariable=output_var).grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
-    ttk.Button(render_frame, text="Choose", command=gui.choose_output).grid(row=1, column=2, sticky="e", pady=(6, 0))
-
-    ttk.Label(render_frame, text="Duration").grid(row=2, column=0, sticky="w", pady=(6, 0))
-    ttk.Entry(render_frame, textvariable=duration_var, width=10).grid(row=2, column=1, sticky="w", padx=(8, 8), pady=(6, 0))
-    ttk.Label(render_frame, text="BPM").grid(row=2, column=1, sticky="w", padx=(96, 0), pady=(6, 0))
-    ttk.Entry(render_frame, textvariable=bpm_var, width=10).grid(row=2, column=1, sticky="w", padx=(136, 0), pady=(6, 0))
-    ttk.Label(render_frame, text="Grid").grid(row=2, column=1, sticky="w", padx=(224, 0), pady=(6, 0))
-    ttk.Combobox(render_frame, values=SLICE_GRIDS, textvariable=slice_grid_var, state="readonly", width=8).grid(row=2, column=1, sticky="w", padx=(264, 0), pady=(6, 0))
-
-    ttk.Label(render_frame, text="Baseline").grid(row=3, column=0, sticky="w", pady=(6, 0))
-    ttk.Entry(render_frame, textvariable=baseline_var).grid(row=3, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
-    ttk.Button(render_frame, text="Choose", command=gui.choose_baseline).grid(row=3, column=2, sticky="e", pady=(6, 0))
-    render_frame.columnconfigure(1, weight=1)
-
-    semi_live_row = ttk.Frame(render_frame)
-    semi_live_row.grid(row=4, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
-    ttk.Checkbutton(semi_live_row, text="Semi-live track", variable=semi_live_var, command=gui.update_command_preview).pack(side=tk.LEFT)
-    ttk.Label(semi_live_row, text="Chunk sec").pack(side=tk.LEFT, padx=(16, 4))
-    ttk.Entry(semi_live_row, textvariable=chunk_sec_var, width=8).pack(side=tk.LEFT)
-
-    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=5, column=0, sticky="nw", pady=(8, 0))
-    command_box = tk.Text(render_frame, height=3, wrap="word")
-    gui.command_box = command_box
-    command_box.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
-    command_box.configure(state="disabled")
-
-    launch_row = ttk.Frame(render_frame)
-    launch_row.grid(row=6, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
-    ttk.Button(launch_row, text="Start render", command=gui.start_render).pack(side=tk.LEFT)
-    ttk.Button(launch_row, text="Stop", command=gui.stop_render).pack(side=tk.LEFT, padx=(8, 0))
-
-    progress_frame = ttk.LabelFrame(frame, text="Render progress", padding=8)
-    progress_frame.pack(fill=tk.X, pady=(8, 8))
-    progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=100.0)
-    progress_bar.pack(fill=tk.X)
-    ttk.Label(progress_frame, textvariable=progress_text_var).pack(anchor="w", pady=(4, 0))
-    ttk.Label(progress_frame, textvariable=progress_detail_var).pack(anchor="w")
-    ttk.Label(progress_frame, textvariable=track_path_var).pack(anchor="w")
-    ttk.Button(progress_frame, text="Open track", command=gui.open_track).pack(anchor="w", pady=(4, 0))
-
-    status = ttk.Label(frame, textvariable=status_var)
-    status.pack(anchor="w", pady=(10, 0))
 
     preset_combo.bind("<<ComboboxSelected>>", lambda _e: gui.apply_preset(preset_var.get()))
     sec_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
