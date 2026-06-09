@@ -74,7 +74,7 @@ Signal-breach controls:
 - `--reverse-shard-rate 0..1`: reverses tiny shards inside fragments.
 - `--filter-severity light|medium|hard|auto`: narrows or loosens the transmission-band filtering.
 
-The live-control file, Tk GUI, and TouchDesigner bridge can also drive `burst_rate`, `dropout_rate`, `reverse_shard_rate`, `filter_severity`, `source_diversity`, `section_arc`, and `source_score` during audio renders.
+The live-control file, Tk GUI, and TouchDesigner bridge can also drive `burst_rate`, `dropout_rate`, `reverse_shard_rate`, `filter_severity`, `source_diversity`, `section_arc`, `source_score`, and `baseline_placement` during audio renders.
 
 For a short setup check without rendering:
 

@@ -40,6 +40,7 @@ ALLOWED: Dict[str, Tuple[float, float]] = {
 
 SECTION_ARCS = {"", "classic", "spoken", "breach", "pulse", "ghost"}
 SOURCE_SCORES = {"", "off", "spoken", "beat", "breach"}
+BASELINE_PLACEMENTS = {"", "any", "accent", "gap", "offbeat"}
 
 
 def clamp(v: float, low: float, high: float) -> float:
@@ -72,6 +73,10 @@ def extract_conductor_controls(raw: Dict[str, object]) -> Dict[str, object]:
         source_score = str(raw.get("source_score", "")).strip().lower()
         if source_score in SOURCE_SCORES:
             out["source_score"] = source_score
+    if "baseline_placement" in raw:
+        baseline_placement = str(raw.get("baseline_placement", "")).strip().lower()
+        if baseline_placement in BASELINE_PLACEMENTS:
+            out["baseline_placement"] = baseline_placement
     for key in ("hold_section", "burst_now", "panic_silence"):
         if key in raw:
             out[key] = bool(raw.get(key))

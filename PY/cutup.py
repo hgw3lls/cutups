@@ -736,6 +736,7 @@ class RuntimeParams:
     source_diversity: float = 0.0
     section_arc: str = ""
     source_score: str = ""
+    baseline_placement: str = ""
     force_section: str = ""
     hold_section: bool = False
     burst_now: bool = False
@@ -755,6 +756,7 @@ class LiveControlState:
     filter_severity_override: str = ""
     section_arc_override: str = ""
     source_score_override: str = ""
+    baseline_placement_override: str = ""
     hold_section: bool = False
     burst_now: bool = False
     panic_silence: bool = False
@@ -806,6 +808,9 @@ class LiveControlState:
         if "source_score" in controls:
             source_score = str(controls.get("source_score", "")).strip().lower()
             self.source_score_override = source_score if source_score in SOURCE_SCORE_MODES else ""
+        if "baseline_placement" in controls:
+            baseline_placement = str(controls.get("baseline_placement", "")).strip().lower()
+            self.baseline_placement_override = baseline_placement if baseline_placement in BASELINE_PLACEMENT_MODES else ""
         self.hold_section = bool(controls.get("hold_section", False))
         self.burst_now = bool(controls.get("burst_now", False))
         self.panic_silence = bool(controls.get("panic_silence", False))
@@ -829,6 +834,8 @@ class LiveControlState:
             row["section_arc"] = self.section_arc_override
         if self.source_score_override:
             row["source_score"] = self.source_score_override
+        if self.baseline_placement_override:
+            row["baseline_placement"] = self.baseline_placement_override
         row.update(fields)
         try:
             with self.telemetry_path.open("a", encoding="utf-8") as f:
@@ -1382,6 +1389,7 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
             source_diversity=values["source_diversity"],
             section_arc=live.section_arc_override,
             source_score=live.source_score_override,
+            baseline_placement=live.baseline_placement_override,
             force_section=live.section_override,
             hold_section=live.hold_section,
             burst_now=live.burst_now,
@@ -1406,6 +1414,7 @@ def runtime_snapshot(args: argparse.Namespace, live: Optional[LiveControlState] 
         source_diversity=float(getattr(args, "source_diversity", 0.0)),
         section_arc="",
         source_score="",
+        baseline_placement="",
     )
 
 
@@ -1432,6 +1441,8 @@ def apply_runtime_params(args: argparse.Namespace, runtime: RuntimeParams) -> ar
         local_args.section_arc = runtime.section_arc
     if runtime.source_score:
         local_args.source_score = runtime.source_score
+    if runtime.baseline_placement:
+        local_args.baseline_placement = runtime.baseline_placement
     return local_args
 
 
@@ -3717,7 +3728,7 @@ def baseline_grid_profile(audio: Optional[AudioSegment], args: argparse.Namespac
         "energies": [],
         "summary": {"active": False, "mode": mode, "grid_ms": grid_ms, "cell_count": 0, "captured": 0, "truncated": False, "cells": []},
     }
-    if mode == "any" or audio is None or grid_ms <= 0 or total_ms <= 0:
+    if audio is None or grid_ms <= 0 or total_ms <= 0:
         return inactive
 
     cell_count = int(math.ceil(total_ms / float(grid_ms)))
@@ -4495,7 +4506,9 @@ def place_events(
         pos = clamp_to_section(pos, sec_span, len(shaped), grid_ms=grid_ms)
         placement_info = {"mode": "any", "original_start_ms": pos, "cell_index": -1, "cell_energy": 0.0}
         if baseline_grid:
-            pos, placement_info = apply_baseline_placement(pos, len(shaped), sec_span, total_ms, grid_ms, baseline_grid)
+            event_baseline_grid = dict(baseline_grid)
+            event_baseline_grid["mode"] = baseline_placement_mode(local_args)
+            pos, placement_info = apply_baseline_placement(pos, len(shaped), sec_span, total_ms, grid_ms, event_baseline_grid)
         current_anchor = min(total_ms - 50, pos + step)
 
         if runtime.panic_silence and random.random() < 0.55:

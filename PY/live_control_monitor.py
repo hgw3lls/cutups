@@ -44,6 +44,7 @@ def main() -> None:
     last_filter_severity = ""
     last_section_arc = ""
     last_source_score = ""
+    last_baseline_placement = ""
 
     while True:
         try:
@@ -78,6 +79,9 @@ def main() -> None:
                     source_score = row.get("source_score", "")
                     if isinstance(source_score, str) and source_score:
                         last_source_score = source_score
+                    baseline_placement = row.get("baseline_placement", "")
+                    if isinstance(baseline_placement, str) and baseline_placement:
+                        last_baseline_placement = baseline_placement
         except OSError:
             pass
 
@@ -103,7 +107,7 @@ def main() -> None:
             print("  - (none yet)")
 
         print("\nlast overrides:")
-        if last_overrides or last_filter_severity or last_section_arc or last_source_score:
+        if last_overrides or last_filter_severity or last_section_arc or last_source_score or last_baseline_placement:
             for k in sorted(last_overrides):
                 print(f"  - {k:18s} {last_overrides[k]:.3f}")
             if last_filter_severity:
@@ -112,6 +116,8 @@ def main() -> None:
                 print(f"  - {'section_arc':18s} {last_section_arc}")
             if last_source_score:
                 print(f"  - {'source_score':18s} {last_source_score}")
+            if last_baseline_placement:
+                print(f"  - {'baseline_placement':18s} {last_baseline_placement}")
         else:
             print("  - (none yet)")
 

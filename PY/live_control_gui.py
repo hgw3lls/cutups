@@ -55,6 +55,7 @@ RANGES: Dict[str, Tuple[float, float, float]] = {
 
 SECTION_ARCS = ["classic", "spoken", "breach", "pulse", "ghost"]
 SOURCE_SCORES = ["off", "spoken", "beat", "breach"]
+BASELINE_PLACEMENTS = ["any", "accent", "gap", "offbeat"]
 
 PRESETS: Dict[str, Dict[str, object]] = {
     "Default": {k: v[2] for k, v in RANGES.items()},
@@ -72,6 +73,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "filter_severity": "hard",
         "section_arc": "breach",
         "source_score": "breach",
+        "baseline_placement": "gap",
         "source_diversity": 0.22,
     },
     "spoken-word-cutup": {
@@ -84,6 +86,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "silence_prob": 0.18,
         "section_arc": "spoken",
         "source_score": "spoken",
+        "baseline_placement": "gap",
         "source_diversity": 0.65,
     },
     "beat-cutup": {
@@ -100,6 +103,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "beat_dropout_rate": 0.16,
         "section_arc": "pulse",
         "source_score": "beat",
+        "baseline_placement": "accent",
         "source_diversity": 0.35,
     },
     "radio-intrusion": {
@@ -115,6 +119,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "filter_severity": "hard",
         "section_arc": "ghost",
         "source_score": "breach",
+        "baseline_placement": "gap",
         "source_diversity": 0.45,
     },
     "hard-stutter": {
@@ -133,6 +138,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "beat_dropout_rate": 0.24,
         "section_arc": "pulse",
         "source_score": "beat",
+        "baseline_placement": "accent",
         "source_diversity": 0.25,
     },
     "ghost-transmission": {
@@ -145,6 +151,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "silence_prob": 0.38,
         "section_arc": "ghost",
         "source_score": "spoken",
+        "baseline_placement": "offbeat",
         "source_diversity": 0.18,
     },
     "Bureaucratic Pressure": {
@@ -166,6 +173,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "silence_prob": 0.34,
         "section_arc": "ghost",
         "source_score": "spoken",
+        "baseline_placement": "offbeat",
         "source_diversity": 0.25,
     },
     "Collapse Ritual": {
@@ -178,6 +186,7 @@ PRESETS: Dict[str, Dict[str, object]] = {
         "silence_prob": 0.41,
         "section_arc": "breach",
         "source_score": "breach",
+        "baseline_placement": "gap",
         "source_diversity": 0.3,
     },
 }
@@ -194,6 +203,7 @@ class ControlGUI:
     filter_var: tk.StringVar
     arc_var: tk.StringVar
     score_var: tk.StringVar
+    placement_var: tk.StringVar
     hold_var: tk.BooleanVar
     burst_var: tk.BooleanVar
     panic_var: tk.BooleanVar
@@ -211,6 +221,7 @@ class ControlGUI:
         controls["filter_severity"] = self.filter_var.get().strip().lower()
         controls["section_arc"] = self.arc_var.get().strip().lower()
         controls["source_score"] = self.score_var.get().strip().lower()
+        controls["baseline_placement"] = self.placement_var.get().strip().lower()
         controls["hold_section"] = bool(self.hold_var.get())
         controls["burst_now"] = bool(self.burst_var.get())
         controls["panic_silence"] = bool(self.panic_var.get())
@@ -229,6 +240,7 @@ class ControlGUI:
         self.filter_var.set(str(data.get("filter_severity", "auto")))
         self.arc_var.set(str(data.get("section_arc", "classic")))
         self.score_var.set(str(data.get("source_score", "off")))
+        self.placement_var.set(str(data.get("baseline_placement", "any")))
         self.write_payload()
 
     def reset_defaults(self) -> None:
@@ -249,7 +261,7 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("700x820")
+    root.geometry("700x840")
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill=tk.BOTH, expand=True)
@@ -274,6 +286,7 @@ def main() -> None:
     filter_var = tk.StringVar(value="auto")
     arc_var = tk.StringVar(value="classic")
     score_var = tk.StringVar(value="off")
+    placement_var = tk.StringVar(value="any")
     hold_var = tk.BooleanVar(value=False)
     burst_var = tk.BooleanVar(value=False)
     panic_var = tk.BooleanVar(value=False)
@@ -287,6 +300,7 @@ def main() -> None:
         filter_var=filter_var,
         arc_var=arc_var,
         score_var=score_var,
+        placement_var=placement_var,
         hold_var=hold_var,
         burst_var=burst_var,
         panic_var=panic_var,
@@ -329,6 +343,13 @@ def main() -> None:
     score_combo.pack(side=tk.LEFT, padx=(8, 10))
     arc_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
     score_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
+
+    placement_row = ttk.Frame(frame)
+    placement_row.pack(fill=tk.X, pady=(4, 4))
+    ttk.Label(placement_row, text="baseline_placement", width=22).pack(side=tk.LEFT)
+    placement_combo = ttk.Combobox(placement_row, values=BASELINE_PLACEMENTS, textvariable=placement_var, state="readonly", width=14)
+    placement_combo.pack(side=tk.LEFT, padx=(8, 10))
+    placement_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
     btns = ttk.Frame(frame)
     btns.pack(fill=tk.X, pady=(10, 8))

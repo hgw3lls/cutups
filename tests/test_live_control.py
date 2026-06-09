@@ -284,6 +284,29 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(pos, 100)
         self.assertEqual(info["cell_index"], 1)
 
+    def test_baseline_grid_profile_stays_available_for_live_override(self) -> None:
+        class FakeAudio:
+            def __init__(self, duration_ms: int = 500, rms: int = 100) -> None:
+                self.duration_ms = duration_ms
+                self.rms = rms
+
+            def __len__(self) -> int:
+                return self.duration_ms
+
+            def __getitem__(self, key):
+                start = int(key.start or 0)
+                stop = int(key.stop or self.duration_ms)
+                rms = 200 if (start // 100) % 2 == 0 else 20
+                return FakeAudio(max(0, stop - start), rms=rms)
+
+        args = types.SimpleNamespace(baseline_placement="any", bpm=150.0, slice_grid="1/16")
+        profile = cutup.baseline_grid_profile(FakeAudio(), args, total_ms=500)
+        self.assertTrue(profile["active"])
+        self.assertEqual(profile["mode"], "any")
+        self.assertEqual(profile["grid_ms"], 100)
+        self.assertEqual(profile["cell_count"], 5)
+        self.assertEqual(len(profile["energies"]), 5)
+
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "qa_sources"
@@ -328,6 +351,7 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(runtime.absurd_seriousness, 0.2)
         self.assertEqual(runtime.ghost_prob, 0.7)
         self.assertEqual(runtime.source_diversity, 0.4)
+        self.assertEqual(runtime.baseline_placement, "")
 
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(
@@ -349,6 +373,7 @@ class LiveControlTests(unittest.TestCase):
             source_diversity=0.0,
             section_arc="classic",
             source_score="off",
+            baseline_placement="any",
         )
         runtime = cutup.RuntimeParams(
             absurd_seriousness=0.2,
@@ -369,6 +394,7 @@ class LiveControlTests(unittest.TestCase):
             source_diversity=0.88,
             section_arc="ghost",
             source_score="breach",
+            baseline_placement="gap",
         )
         out = cutup.apply_runtime_params(args, runtime)
         self.assertEqual(out.burst_rate, 0.9)
@@ -382,6 +408,7 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(out.source_diversity, 0.88)
         self.assertEqual(out.section_arc, "ghost")
         self.assertEqual(out.source_score, "breach")
+        self.assertEqual(out.baseline_placement, "gap")
 
     def test_apply_preset_keeps_explicit_cli_values(self) -> None:
         args = types.SimpleNamespace(
@@ -974,6 +1001,7 @@ class LiveControlTests(unittest.TestCase):
                             "source_diversity": 1.7,
                             "section_arc": "ghost",
                             "source_score": "breach",
+                            "baseline_placement": "offbeat",
                             "force_section": "collapse",
                             "hold_section": True,
                             "burst_now": True,
@@ -997,6 +1025,7 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(live.overrides["source_diversity"], 1.0)
             self.assertEqual(live.section_arc_override, "ghost")
             self.assertEqual(live.source_score_override, "breach")
+            self.assertEqual(live.baseline_placement_override, "offbeat")
             self.assertEqual(live.filter_severity_override, "hard")
             self.assertEqual(live.section_override, "COLLAPSE")
             self.assertTrue(live.hold_section)
@@ -1009,6 +1038,7 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(live.filter_severity_override, "hard")
             self.assertEqual(live.section_arc_override, "ghost")
             self.assertEqual(live.source_score_override, "breach")
+            self.assertEqual(live.baseline_placement_override, "offbeat")
 
     def test_live_poll_accepts_legacy_flat_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1066,6 +1096,7 @@ class LiveControlTests(unittest.TestCase):
                 "filter_severity": "medium",
                 "section_arc": "pulse",
                 "source_score": "beat",
+                "baseline_placement": "gap",
                 "hold_section": 1,
                 "burst_now": 0,
                 "panic_silence": True,
@@ -1075,13 +1106,15 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(out["filter_severity"], "medium")
         self.assertEqual(out["section_arc"], "pulse")
         self.assertEqual(out["source_score"], "beat")
+        self.assertEqual(out["baseline_placement"], "gap")
         self.assertTrue(out["hold_section"])
         self.assertFalse(out["burst_now"])
         self.assertTrue(out["panic_silence"])
-        invalid = td_bridge.extract_conductor_controls({"force_section": "entry", "section_arc": "bad", "source_score": "bad"})
+        invalid = td_bridge.extract_conductor_controls({"force_section": "entry", "section_arc": "bad", "source_score": "bad", "baseline_placement": "bad"})
         self.assertNotIn("filter_severity", invalid)
         self.assertNotIn("section_arc", invalid)
         self.assertNotIn("source_score", invalid)
+        self.assertNotIn("baseline_placement", invalid)
 
 
 if __name__ == "__main__":

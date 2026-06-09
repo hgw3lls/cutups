@@ -325,6 +325,7 @@ Create a control file:
     "source_diversity": 0.55,
     "section_arc": "breach",
     "source_score": "breach",
+    "baseline_placement": "gap",
     "force_section": "PRESSURE",
     "hold_section": true,
     "burst_now": false,
@@ -441,6 +442,7 @@ Supported live keys in the JSON file:
 - `filter_severity` (`auto | light | medium | hard`)
 - `section_arc` (`classic | spoken | breach | pulse | ghost`)
 - `source_score` (`off | spoken | beat | breach`)
+- `baseline_placement` (`any | accent | gap | offbeat`)
 - `force_section` (`"" | ENTRY | BUILD | PRESSURE | COLLAPSE | AFTERIMAGE`)
 - `hold_section` (`true|false`)
 - `burst_now` (`true|false`)
@@ -500,7 +502,7 @@ python PY/cutup.py \
 3) In TouchDesigner, send UDP packets containing JSON objects (from UDP Out DAT/CHOP), for example:
 
 ```json
-{"version":2,"controls":{"absurd_seriousness":0.9,"recurrence_prob":0.62,"ghost_prob":0.5,"burst_rate":0.8,"dropout_rate":0.6,"stutter_rate":0.7,"repeat_rate":0.5,"source_diversity":0.5,"filter_severity":"hard","section_arc":"breach","source_score":"breach","force_section":"COLLAPSE","burst_now":true}}
+{"version":2,"controls":{"absurd_seriousness":0.9,"recurrence_prob":0.62,"ghost_prob":0.5,"burst_rate":0.8,"dropout_rate":0.6,"stutter_rate":0.7,"repeat_rate":0.5,"source_diversity":0.5,"filter_severity":"hard","section_arc":"breach","source_score":"breach","baseline_placement":"gap","force_section":"COLLAPSE","burst_now":true}}
 ```
 
 Notes:
