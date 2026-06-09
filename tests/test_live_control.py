@@ -466,6 +466,28 @@ class LiveControlTests(unittest.TestCase):
         self.assertIn("--semi-live-chunk-sec", cmd)
         self.assertIn("6", cmd)
 
+    def test_live_gui_validate_render_settings_blocks_common_launch_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.wav"
+            source.write_text("not real audio", encoding="utf-8")
+            self.assertIn(
+                "Grid slicing requires a BPM",
+                live_control_gui.validate_render_settings(str(source), "30", "", "1/16", "", True, "8", root),
+            )
+            self.assertEqual(
+                "",
+                live_control_gui.validate_render_settings(str(source), "30", "120", "1/16", "", True, "8", root),
+            )
+            self.assertIn(
+                "Chunk sec",
+                live_control_gui.validate_render_settings(str(source), "30", "120", "1/16", "", True, "0.5", root),
+            )
+            self.assertIn(
+                "Input does not exist",
+                live_control_gui.validate_render_settings(str(root / "missing.wav"), "30", "120", "off", "", False, "8", root),
+            )
+
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(
             absurd_seriousness=0.2,

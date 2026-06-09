@@ -129,6 +129,58 @@ def build_render_command(
     return cmd
 
 
+def resolve_render_path(raw: str, base_dir: Path) -> Path:
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def validate_render_settings(
+    input_path: str,
+    duration: str,
+    bpm: str,
+    slice_grid: str,
+    baseline_beat: str,
+    semi_live: bool,
+    semi_live_chunk_sec: str,
+    base_dir: Path,
+) -> str:
+    resolved_input = resolve_render_path(input_path.strip() or "./samples", base_dir)
+    if not resolved_input.exists():
+        return f"Input does not exist: {resolved_input}"
+    try:
+        if float(duration.strip() or "45") <= 0:
+            return "Duration must be greater than 0."
+    except ValueError:
+        return "Duration must be a number."
+    grid = (slice_grid or "off").strip()
+    bpm_value = (bpm or "").strip()
+    if grid and grid != "off":
+        try:
+            parsed_bpm = float(bpm_value)
+        except ValueError:
+            return "Grid slicing requires a BPM. Enter BPM or set Grid to off."
+        if parsed_bpm <= 0:
+            return "Grid slicing requires a BPM. Enter BPM or set Grid to off."
+    elif bpm_value:
+        try:
+            if float(bpm_value) <= 0:
+                return "BPM must be greater than 0."
+        except ValueError:
+            return "BPM must be a number."
+    baseline_value = baseline_beat.strip()
+    if baseline_value and not resolve_render_path(baseline_value, base_dir).exists():
+        return f"Baseline does not exist: {resolve_render_path(baseline_value, base_dir)}"
+    if semi_live:
+        try:
+            if float(semi_live_chunk_sec.strip() or "8") < 1.0:
+                return "Chunk sec must be at least 1."
+        except ValueError:
+            return "Chunk sec must be a number."
+    return ""
+
+
 def make_scrollable_frame(parent: Any) -> Tuple[Any, Any]:
     container = ttk.Frame(parent)
     canvas = tk.Canvas(container, highlightthickness=0)
@@ -321,6 +373,7 @@ class ControlGUI:
     panic_var: tk.BooleanVar
     render_process: Optional[subprocess.Popen] = None
     render_log_handle: Any = None
+    render_log_path: Optional[Path] = None
 
     @staticmethod
     def _atomic_write(path: Path, text: str) -> None:
@@ -446,9 +499,33 @@ class ControlGUI:
         except OSError as exc:
             self.status_var.set(f"Could not open track: {exc}")
 
+    def render_log_tail(self, max_lines: int = 6) -> str:
+        if not self.render_log_path or not self.render_log_path.exists():
+            return ""
+        try:
+            lines = [line.strip() for line in self.render_log_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+        except OSError:
+            return ""
+        return " | ".join(lines[-max_lines:])
+
     def start_render(self) -> None:
         if self.render_process and self.render_process.poll() is None:
             self.status_var.set("Render already running")
+            return
+        render_cwd = cutup_script_path().parents[1]
+        validation_error = validate_render_settings(
+            self.input_var.get(),
+            self.duration_var.get(),
+            self.bpm_var.get(),
+            self.slice_grid_var.get(),
+            self.baseline_var.get(),
+            bool(self.semi_live_var.get()),
+            self.chunk_sec_var.get(),
+            render_cwd,
+        )
+        if validation_error:
+            self.status_var.set(validation_error)
+            self.progress_detail_var.set(validation_error)
             return
         self.write_payload()
         self.progress_var.set(0.0)
@@ -459,12 +536,13 @@ class ControlGUI:
         self.telemetry_file.parent.mkdir(parents=True, exist_ok=True)
         self.telemetry_file.write_text("", encoding="utf-8")
         log_path = self.telemetry_file.with_suffix(".log")
+        self.render_log_path = log_path
         self.render_log_handle = log_path.open("w", encoding="utf-8")
         cmd = self.current_render_command()
         try:
             self.render_process = subprocess.Popen(
                 cmd,
-                cwd=str(cutup_script_path().parents[1]),
+                cwd=str(render_cwd),
                 stdout=self.render_log_handle,
                 stderr=subprocess.STDOUT,
             )
@@ -493,7 +571,13 @@ class ControlGUI:
         if self.render_log_handle:
             self.render_log_handle.close()
             self.render_log_handle = None
-        self.status_var.set("Render complete" if code == 0 else f"Render exited with code {code}")
+        if code == 0:
+            self.status_var.set("Render complete")
+        else:
+            tail = self.render_log_tail()
+            message = f"Render failed with code {code}: {tail}" if tail else f"Render exited with code {code}"
+            self.status_var.set(message)
+            self.progress_detail_var.set(message)
 
     def apply_preset(self, preset_name: str) -> None:
         data = PRESETS.get(preset_name, PRESETS["Default"])
