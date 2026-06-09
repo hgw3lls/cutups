@@ -844,6 +844,95 @@ class LiveControlState:
             pass
 
 
+def format_eta(seconds: Optional[float]) -> str:
+    if seconds is None or not math.isfinite(float(seconds)) or seconds < 0:
+        return "--:--"
+    total = int(round(float(seconds)))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def progress_child_span(span: Tuple[float, float], start: float, end: float) -> Tuple[float, float]:
+    a, b = span
+    width = max(0.0, b - a)
+    return a + width * clamp(float(start), 0.0, 1.0), a + width * clamp(float(end), 0.0, 1.0)
+
+
+def progress_spans(mode: str) -> Dict[str, Tuple[float, float]]:
+    if mode == "audio":
+        return {"audio": (0.0, 1.0)}
+    if mode == "agitprop":
+        return {"agitprop": (0.0, 1.0)}
+    if mode == "cuttargets":
+        return {"cuttargets": (0.0, 1.0)}
+    if mode == "both":
+        return {"agitprop": (0.0, 0.18), "audio": (0.18, 1.0)}
+    if mode == "all":
+        return {"agitprop": (0.0, 0.12), "cuttargets": (0.12, 0.22), "audio": (0.22, 1.0)}
+    return {}
+
+
+@dataclass
+class ProgressReporter:
+    enabled: bool = False
+    live: Optional[LiveControlState] = None
+    start_time: float = field(default_factory=time.time)
+    last_emit: float = 0.0
+    last_line_len: int = 0
+    min_interval: float = 0.25
+
+    def update(self, progress: float, stage: str, detail: str = "", force: bool = False) -> None:
+        now = time.time()
+        progress = clamp(float(progress), 0.0, 1.0)
+        if not force and now - self.last_emit < self.min_interval and progress < 1.0:
+            return
+        self.last_emit = now
+        elapsed = max(0.0, now - self.start_time)
+        eta = (elapsed / progress) * (1.0 - progress) if progress > 0 else None
+        percent = progress * 100.0
+        if self.live and self.live.enabled:
+            self.live.telemetry(
+                "progress",
+                progress=round(progress, 6),
+                percent=round(percent, 2),
+                stage=stage,
+                detail=detail,
+                elapsed_sec=round(elapsed, 2),
+                eta_sec=round(float(eta), 2) if eta is not None else None,
+            )
+        if not self.enabled:
+            return
+        width = 28
+        filled = int(round(width * progress))
+        bar = "#" * filled + "-" * (width - filled)
+        message = f"\r[{bar}] {percent:6.2f}% {stage}"
+        if detail:
+            message += f" - {detail}"
+        message += f" ETA {format_eta(eta)}"
+        pad = max(0, self.last_line_len - len(message))
+        sys.stderr.write(message + (" " * pad))
+        sys.stderr.flush()
+        self.last_line_len = len(message)
+
+    def update_span(self, span: Tuple[float, float], fraction: float, stage: str, detail: str = "", force: bool = False) -> None:
+        a, b = span
+        self.update(a + (b - a) * clamp(float(fraction), 0.0, 1.0), stage, detail, force=force)
+
+    def finish(self) -> None:
+        self.update(1.0, "complete", "done", force=True)
+        if self.enabled:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+
+
+def build_progress_reporter(args: argparse.Namespace, live: Optional[LiveControlState]) -> ProgressReporter:
+    enabled = bool(not getattr(args, "no_progress", False) and sys.stderr.isatty())
+    return ProgressReporter(enabled=enabled, live=live)
+
+
 # -------------------------------------------------------------------
 # CLI
 # -------------------------------------------------------------------
@@ -864,6 +953,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--init-qa-sources", default="", help="Write synthetic local QA WAV/cue sources under this folder, then exit.")
     p.add_argument("--dry-run", action="store_true", help="Print resolved inputs/configuration without rendering outputs.")
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
+    p.add_argument("--no-progress", action="store_true", help="Disable terminal progress bar output.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
     p.add_argument("--analysis-cache", default="", help="Write/update a lightweight JSON source analysis cache for audio mode. Use 'auto' for output/audio_analysis_cache.json.")
 
@@ -2569,7 +2659,16 @@ def build_chant_cell(top300: List[Line], full: List[Line], args: argparse.Namesp
     }
 
 
-def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary, live: Optional[LiveControlState] = None) -> Path:
+def run_agitprop_mode(
+    args: argparse.Namespace,
+    output_root: Path,
+    summary: RunSummary,
+    live: Optional[LiveControlState] = None,
+    progress: Optional[ProgressReporter] = None,
+    progress_span: Tuple[float, float] = (0.0, 1.0),
+) -> Path:
+    if progress:
+        progress.update_span(progress_span, 0.0, "agitprop", "loading line banks", force=True)
     top300_path, full_path = Path(args.top300_csv).expanduser().resolve(), Path(args.full_csv).expanduser().resolve()
     if not top300_path.exists() or not full_path.exists():
         raise SystemExit("Missing --top300-csv or --full-csv input file.")
@@ -2584,13 +2683,33 @@ def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunS
 
     if not top300 or not full:
         raise SystemExit("CSV banks loaded no usable lines.")
+    if progress:
+        progress.update_span(progress_span, 0.15, "agitprop", "building slogans", force=True)
 
     agit_out = output_root / "agitprop"
     agit_out.mkdir(parents=True, exist_ok=True)
 
-    slogans = [build_slogan(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.agitprop_count))]
-    broadcasts = [build_broadcast(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.broadcast_count))]
-    chant_cells = [build_chant_cell(top300, full, args, resolve_personality(args)) for _ in range(max(1, args.chant_count))]
+    personality = resolve_personality(args)
+    slogan_count = max(1, args.agitprop_count)
+    broadcast_count = max(1, args.broadcast_count)
+    chant_count = max(1, args.chant_count)
+    slogans = []
+    for idx in range(slogan_count):
+        slogans.append(build_slogan(top300, full, args, personality))
+        if progress and (idx == 0 or idx + 1 == slogan_count or idx % 10 == 0):
+            progress.update_span(progress_span, 0.15 + 0.25 * ((idx + 1) / slogan_count), "agitprop", f"slogans {idx + 1}/{slogan_count}")
+    broadcasts = []
+    for idx in range(broadcast_count):
+        broadcasts.append(build_broadcast(top300, full, args, personality))
+        if progress and (idx == 0 or idx + 1 == broadcast_count or idx % 5 == 0):
+            progress.update_span(progress_span, 0.40 + 0.20 * ((idx + 1) / broadcast_count), "agitprop", f"broadcasts {idx + 1}/{broadcast_count}")
+    chant_cells = []
+    for idx in range(chant_count):
+        chant_cells.append(build_chant_cell(top300, full, args, personality))
+        if progress and (idx == 0 or idx + 1 == chant_count or idx % 20 == 0):
+            progress.update_span(progress_span, 0.60 + 0.30 * ((idx + 1) / chant_count), "agitprop", f"chant cells {idx + 1}/{chant_count}")
+    if progress:
+        progress.update_span(progress_span, 0.92, "agitprop", "writing files", force=True)
 
     (agit_out / "slogans.txt").write_text("\n\n".join(s.strip() for s in slogans) + "\n", encoding="utf-8")
     (agit_out / "broadcasts.txt").write_text("\n\n".join(s.strip() for s in broadcasts) + "\n", encoding="utf-8")
@@ -2603,6 +2722,8 @@ def run_agitprop_mode(args: argparse.Namespace, output_root: Path, summary: RunS
 
     summary.slogans, summary.broadcasts, summary.chants = len(slogans), len(broadcasts), len(chant_cells)
     summary.output_paths.extend([str(agit_out / "slogans.txt"), str(agit_out / "broadcasts.txt"), str(chant_path)])
+    if progress:
+        progress.update_span(progress_span, 1.0, "agitprop", "complete", force=True)
     return chant_path
 
 
@@ -2689,7 +2810,16 @@ def best_matches(query: str, source_rows: List[SourceRow], top_n: int) -> List[T
     return scored[: max(1, top_n)]
 
 
-def run_cuttargets_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary, chant_cells_path: Optional[Path] = None) -> Path:
+def run_cuttargets_mode(
+    args: argparse.Namespace,
+    output_root: Path,
+    summary: RunSummary,
+    chant_cells_path: Optional[Path] = None,
+    progress: Optional[ProgressReporter] = None,
+    progress_span: Tuple[float, float] = (0.0, 1.0),
+) -> Path:
+    if progress:
+        progress.update_span(progress_span, 0.0, "cuttargets", "loading CSV inputs", force=True)
     top300_path, full_path = Path(args.top300_csv).expanduser().resolve(), Path(args.full_csv).expanduser().resolve()
     chant_path = chant_cells_path or (Path(args.chant_cells_csv).expanduser().resolve() if args.chant_cells_csv else (output_root / "agitprop" / "chant_cells.csv").resolve())
     if not top300_path.exists() or not full_path.exists() or not chant_path.exists():
@@ -2701,6 +2831,8 @@ def run_cuttargets_mode(args: argparse.Namespace, output_root: Path, summary: Ru
     if not all_rows:
         raise SystemExit("No usable source rows found in top300/full CSV inputs.")
     chant_cells = load_chant_cells(chant_path)
+    if progress:
+        progress.update_span(progress_span, 0.25, "cuttargets", f"matching {len(chant_cells)} chant cells", force=True)
 
     out_path = output_root / "agitprop" / "cut_targets.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2714,6 +2846,8 @@ def run_cuttargets_mode(args: argparse.Namespace, output_root: Path, summary: Ru
         matches = best_matches(text, all_rows, args.cut_match_count)
         if not matches:
             out_rows.append({"cell_index": str(i), "mode": mode, "delivery": delivery, "generated_text": text, "normalized_query": query_norm, "match_rank": "", "match_score": "", "recommended": "", "match_method": "none", "source_bank": "", "file": "", "clip_id": "", "cue_index": "", "start_tc": "", "end_tc": "", "duration_sec": "", "source_text": ""})
+            if progress and (i == 1 or i == len(chant_cells) or i % 25 == 0):
+                progress.update_span(progress_span, 0.25 + 0.60 * (i / max(1, len(chant_cells))), "cuttargets", f"matched {i}/{len(chant_cells)}")
             continue
         for rank, (score, method, row) in enumerate(matches, start=1):
             out_rows.append({
@@ -2735,7 +2869,11 @@ def run_cuttargets_mode(args: argparse.Namespace, output_root: Path, summary: Ru
                 "duration_sec": row.duration_sec,
                 "source_text": row.text,
             })
+        if progress and (i == 1 or i == len(chant_cells) or i % 25 == 0):
+            progress.update_span(progress_span, 0.25 + 0.60 * (i / max(1, len(chant_cells))), "cuttargets", f"matched {i}/{len(chant_cells)}")
 
+    if progress:
+        progress.update_span(progress_span, 0.9, "cuttargets", "writing cut_targets.csv", force=True)
     with out_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["cell_index", "mode", "delivery", "generated_text", "normalized_query", "match_rank", "match_score", "recommended", "match_method", "source_bank", "file", "clip_id", "cue_index", "start_tc", "end_tc", "duration_sec", "source_text"])
         writer.writeheader()
@@ -2743,6 +2881,8 @@ def run_cuttargets_mode(args: argparse.Namespace, output_root: Path, summary: Ru
 
     summary.cut_matches = len([r for r in out_rows if r["match_rank"]])
     summary.output_paths.append(str(out_path))
+    if progress:
+        progress.update_span(progress_span, 1.0, "cuttargets", "complete", force=True)
     return out_path
 
 
@@ -4370,6 +4510,9 @@ def place_events(
     live: Optional[LiveControlState] = None,
     beat_jump: Optional[BeatJumpState] = None,
     baseline_grid: Optional[Dict[str, object]] = None,
+    progress: Optional[ProgressReporter] = None,
+    progress_span: Tuple[float, float] = (0.0, 1.0),
+    progress_label: str = "",
 ) -> Tuple[AudioSegment, AudioSegment, AudioSegment, List[Event]]:
     voice_main = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
     voice_cuts = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
@@ -4403,10 +4546,12 @@ def place_events(
         return any(a <= position_ms <= b for a, b in dead_air_windows)
 
     for i in range(n_events):
+        if progress and (i == 0 or i + 1 == n_events or i % 10 == 0):
+            progress.update_span(progress_span, i / max(1, n_events), "audio", f"{progress_label} placing events {i + 1}/{n_events}".strip())
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
-        progress = i / max(1, n_events - 1)
-        profile = section_profile(progress, local_args) if local_args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": local_args.silence_prob, "ghost": local_args.ghost_prob}
+        section_progress = i / max(1, n_events - 1)
+        profile = section_profile(section_progress, local_args) if local_args.sectional else {"name": "BUILD", "dens": 1.0, "frag_mul": 1.0, "repeat": 0.2, "reverse": 0.18, "filt": 0.6, "silence": local_args.silence_prob, "ghost": local_args.ghost_prob}
         if runtime.force_section and (runtime.hold_section or runtime.burst_now):
             profile = section_profile(SECTION_PROGRESS[runtime.force_section], local_args)
             profile["name"] = runtime.force_section
@@ -4640,6 +4785,8 @@ def place_events(
                 baseline_cell_energy=float(placement_info.get("cell_energy", 0.0)),
             )
 
+    if progress:
+        progress.update_span(progress_span, 1.0, "audio", f"{progress_label} events placed".strip(), force=True)
     return voice_main, voice_cuts, ghosts, events
 
 
@@ -4656,6 +4803,8 @@ def build_variant(
     live: Optional[LiveControlState] = None,
     beat_jump: Optional[BeatJumpState] = None,
     baseline_beat: Optional[BaselineBeat] = None,
+    progress: Optional[ProgressReporter] = None,
+    progress_span: Tuple[float, float] = (0.0, 1.0),
 ) -> None:
     total_ms = max(2000, int(max(1.0, args.duration) * 1000))
     min_frag_ms = max(10, int(max(0.01, args.min_frag) * 1000))
@@ -4666,6 +4815,8 @@ def build_variant(
     stems_dir = variant_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
+    if progress:
+        progress.update_span(progress_span, 0.0, "audio", f"{variant_name} preparing", force=True)
     baseline_bed = render_baseline_beat_bed(baseline_beat, total_ms) if baseline_beat else None
     baseline_profile = baseline_grid_profile(baseline_bed, args, total_ms)
     setattr(args, "baseline_grid_summary", baseline_profile.get("summary", {}))
@@ -4678,7 +4829,12 @@ def build_variant(
         live=live,
         beat_jump=beat_jump,
         baseline_grid=baseline_profile,
+        progress=progress,
+        progress_span=progress_child_span(progress_span, 0.05, 0.72),
+        progress_label=variant_name,
     )
+    if progress:
+        progress.update_span(progress_span, 0.75, "audio", f"{variant_name} mixing layers", force=True)
     hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
     baseline_duck_count = 0
     if baseline_bed is not None:
@@ -4697,6 +4853,8 @@ def build_variant(
     master = master.overlay(ghosts - 2, position=0).overlay(cuts + 1, position=0).overlay(main + 2, position=0)
     master = normalize_master(master, args.master_gain)
 
+    if progress:
+        progress.update_span(progress_span, 0.84, "audio", f"{variant_name} exporting stems", force=True)
     main.export(stems_dir / "voice_main.wav", format="wav")
     cuts.export(stems_dir / "voice_cuts.wav", format="wav")
     ghosts.export(stems_dir / "ghosts.wav", format="wav")
@@ -4707,12 +4865,16 @@ def build_variant(
     event_path = variant_dir / f"{variant_name}_events.csv"
     plan_path = variant_dir / f"{variant_name}_plan.json"
     score_path = variant_dir / f"{variant_name}_score.txt"
+    if progress:
+        progress.update_span(progress_span, 0.9, "audio", f"{variant_name} exporting master", force=True)
     master.export(master_path, format="wav")
     preview_path: Optional[Path] = None
     preview_ms = preview_duration_ms(args, len(master))
     if preview_ms > 0:
         preview_path = variant_dir / f"{variant_name}_preview.wav"
         master[:preview_ms].export(preview_path, format="wav")
+    if progress:
+        progress.update_span(progress_span, 0.96, "audio", f"{variant_name} writing plan", force=True)
     export_manifest(event_path, events)
     export_audio_plan(plan_path, build_audio_plan(variant_name, events, args, total_ms, min_frag_ms, max_frag_ms))
     score_path.write_text(build_section_score(events), encoding="utf-8")
@@ -4723,9 +4885,20 @@ def build_variant(
     summary.output_paths.extend([str(master_path), str(event_path), str(plan_path), str(score_path)])
     if preview_path:
         summary.output_paths.append(str(preview_path))
+    if progress:
+        progress.update_span(progress_span, 1.0, "audio", f"{variant_name} complete", force=True)
 
 
-def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSummary, live: Optional[LiveControlState] = None) -> None:
+def run_audio_mode(
+    args: argparse.Namespace,
+    output_root: Path,
+    summary: RunSummary,
+    live: Optional[LiveControlState] = None,
+    progress: Optional[ProgressReporter] = None,
+    progress_span: Tuple[float, float] = (0.0, 1.0),
+) -> None:
+    if progress:
+        progress.update_span(progress_span, 0.0, "audio", "checking backend", force=True)
     ensure_audio_backend()
     if not args.input:
         raise SystemExit("--input is required for --mode audio, --mode both, and --mode all")
@@ -4737,6 +4910,8 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
 
     baseline_beat = load_baseline_beat(args)
     baseline_exclusions = [baseline_beat.path] if baseline_beat else None
+    if progress:
+        progress.update_span(progress_span, 0.04, "audio", "discovering source audio", force=True)
 
     if args.cue_file:
         cue_path = Path(args.cue_file).expanduser().resolve()
@@ -4761,10 +4936,14 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
     if unreadable:
         source = Path(args.cue_file).expanduser().resolve() if args.cue_file else input_root
         print(f"Warning: skipped {unreadable} unusable audio/cue row(s) while scanning {source}")
+    if progress:
+        progress.update_span(progress_span, 0.10, "audio", f"loaded {len(samples)} source item(s)", force=True)
 
     analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
     cache_payload: Dict[str, object] = {}
     if analysis_cache:
+        if progress:
+            progress.update_span(progress_span, 0.12, "audio", "writing analysis cache", force=True)
         cache_path = write_analysis_cache(analysis_cache, samples, args, input_root)
         summary.output_paths.append(str(cache_path))
         cache_payload = load_analysis_cache(cache_path)
@@ -4786,12 +4965,27 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
 
     audio_out = output_root / "audio_cutups"
     audio_out.mkdir(parents=True, exist_ok=True)
-    for i in range(1, max(1, args.variants) + 1):
+    variant_count = max(1, args.variants)
+    for i in range(1, variant_count + 1):
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
-        build_variant(samples, audio_out, i, local_args, summary, live=live, beat_jump=beat_jump, baseline_beat=baseline_beat)
+        variant_span = progress_child_span(progress_span, 0.16 + 0.84 * ((i - 1) / variant_count), 0.16 + 0.84 * (i / variant_count))
+        build_variant(
+            samples,
+            audio_out,
+            i,
+            local_args,
+            summary,
+            live=live,
+            beat_jump=beat_jump,
+            baseline_beat=baseline_beat,
+            progress=progress,
+            progress_span=variant_span,
+        )
     summary.beat_similarity_jumps += beat_jump.selections
     summary.beat_similarity_fallbacks += beat_jump.fallbacks
+    if progress:
+        progress.update_span(progress_span, 1.0, "audio", "complete", force=True)
 
 
 # -------------------------------------------------------------------
@@ -4845,6 +5039,8 @@ def main() -> None:
     args.agitprop_personalities = parse_agitprop_personalities(args.agitprop_personality)
     random.seed(args.seed)
     live = build_live_control(args)
+    progress = build_progress_reporter(args, live)
+    spans = progress_spans(args.mode)
 
     output_root = resolve_output_root(args.output, args.overwrite)
     if args.dry_run:
@@ -4857,19 +5053,20 @@ def main() -> None:
     summary = RunSummary()
 
     if args.mode == "audio":
-        run_audio_mode(args, output_root, summary, live=live)
+        run_audio_mode(args, output_root, summary, live=live, progress=progress, progress_span=spans.get("audio", (0.0, 1.0)))
     elif args.mode == "agitprop":
-        run_agitprop_mode(args, output_root, summary, live=live)
+        run_agitprop_mode(args, output_root, summary, live=live, progress=progress, progress_span=spans.get("agitprop", (0.0, 1.0)))
     elif args.mode == "cuttargets":
-        run_cuttargets_mode(args, output_root, summary)
+        run_cuttargets_mode(args, output_root, summary, progress=progress, progress_span=spans.get("cuttargets", (0.0, 1.0)))
     elif args.mode == "both":
-        run_agitprop_mode(args, output_root, summary, live=live)
-        run_audio_mode(args, output_root, summary, live=live)
+        run_agitprop_mode(args, output_root, summary, live=live, progress=progress, progress_span=spans.get("agitprop", (0.0, 0.18)))
+        run_audio_mode(args, output_root, summary, live=live, progress=progress, progress_span=spans.get("audio", (0.18, 1.0)))
     elif args.mode == "all":
-        chant_path = run_agitprop_mode(args, output_root, summary, live=live)
-        run_cuttargets_mode(args, output_root, summary, chant_cells_path=chant_path)
-        run_audio_mode(args, output_root, summary, live=live)
+        chant_path = run_agitprop_mode(args, output_root, summary, live=live, progress=progress, progress_span=spans.get("agitprop", (0.0, 0.12)))
+        run_cuttargets_mode(args, output_root, summary, chant_cells_path=chant_path, progress=progress, progress_span=spans.get("cuttargets", (0.12, 0.22)))
+        run_audio_mode(args, output_root, summary, live=live, progress=progress, progress_span=spans.get("audio", (0.22, 1.0)))
 
+    progress.finish()
     print_summary(summary)
     if args.export_debug_summary:
         maybe_export_debug_summary(summary, output_root)

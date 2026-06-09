@@ -294,6 +294,15 @@ By default, if the requested output folder already exists and contains files, `c
 
 Use `--preview-duration <seconds>` to write a short `cutup_XX_preview.wav` beside each full master for fast auditioning.
 
+Interactive terminal runs show a live progress bar with stage, percent, and ETA on stderr. Add `--no-progress` when writing logs or running in a host that should stay quiet.
+
+For GUI progress, start the live GUI with a telemetry file and run `cutup.py` with the same `--live-telemetry-jsonl` path:
+
+```bash
+python PY/live_control_gui.py --control-file ./live_control.json --telemetry-file ./live_control_telemetry.jsonl
+python PY/cutup.py --mode audio --input ./samples --output out/live_progress --live-control-file ./live_control.json --live-telemetry-jsonl ./live_control_telemetry.jsonl
+```
+
 Each audio variant also writes `cutup_XX_plan.json`, a structured render plan with section windows, event choices, source/layer summaries, transform tags, and per-event `planner` diagnostics. Use it when comparing whether a cutup is being constructed intelligently, not just whether it sounds good. The matching `cutup_XX_events.csv` includes flat diagnostic columns for spreadsheet review.
 
 Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again.

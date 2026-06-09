@@ -353,6 +353,27 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(runtime.source_diversity, 0.4)
         self.assertEqual(runtime.baseline_placement, "")
 
+    def test_progress_reporter_writes_telemetry_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            telemetry = Path(td) / "progress.jsonl"
+            live = cutup.LiveControlState(enabled=True, telemetry_path=telemetry)
+            reporter = cutup.ProgressReporter(enabled=False, live=live)
+            reporter.update(0.25, "audio", "placing events", force=True)
+            row = json.loads(telemetry.read_text(encoding="utf-8").strip())
+        self.assertEqual(row["where"], "progress")
+        self.assertEqual(row["progress"], 0.25)
+        self.assertEqual(row["percent"], 25.0)
+        self.assertEqual(row["stage"], "audio")
+        self.assertEqual(row["detail"], "placing events")
+        self.assertIn("eta_sec", row)
+
+    def test_progress_helpers_format_eta_and_child_spans(self) -> None:
+        self.assertEqual(cutup.format_eta(65), "01:05")
+        self.assertEqual(cutup.format_eta(3661), "1:01:01")
+        self.assertEqual(cutup.format_eta(None), "--:--")
+        self.assertEqual(cutup.progress_child_span((0.2, 0.8), 0.25, 0.75), (0.35000000000000003, 0.6500000000000001))
+        self.assertEqual(cutup.progress_spans("all")["audio"], (0.22, 1.0))
+
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(
             absurd_seriousness=0.2,

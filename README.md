@@ -421,6 +421,7 @@ CLI flags:
 - `--live-control-file <path>`: JSON file to poll for overrides.
 - `--live-control-poll-ms <ms>`: poll interval (minimum `30`).
 - `--live-telemetry-jsonl <path>`: append runtime state snapshots/events as JSONL.
+- `--no-progress`: disable the terminal progress bar. By default, interactive terminal runs show stage, percent, and ETA on stderr.
 
 Supported live keys in the JSON file:
 
@@ -459,6 +460,24 @@ Notes:
 - Script: `PY/live_control_gui.py`
 - Uses Python stdlib `tkinter` (no extra package installs needed on most desktop Python setups).
 - Writes the same JSON schema accepted by `--live-control-file`.
+- Also reads progress telemetry when `cutup.py` is run with the matching `--live-telemetry-jsonl` path.
+
+```bash
+python PY/live_control_gui.py \
+  --control-file ./live_control.json \
+  --telemetry-file ./live_control_telemetry.jsonl
+```
+
+Run `cutup.py` with both paths to see GUI progress and ETA:
+
+```bash
+python PY/cutup.py \
+  --mode audio \
+  --input ./samples \
+  --output out/live_progress \
+  --live-control-file ./live_control.json \
+  --live-telemetry-jsonl ./live_control_telemetry.jsonl
+```
 
 ### Live telemetry monitor
 

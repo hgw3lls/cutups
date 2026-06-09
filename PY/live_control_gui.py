@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -56,6 +57,17 @@ RANGES: Dict[str, Tuple[float, float, float]] = {
 SECTION_ARCS = ["classic", "spoken", "breach", "pulse", "ghost"]
 SOURCE_SCORES = ["off", "spoken", "beat", "breach"]
 BASELINE_PLACEMENTS = ["any", "accent", "gap", "offbeat"]
+
+
+def format_eta(seconds: object) -> str:
+    if not isinstance(seconds, (int, float)) or not math.isfinite(float(seconds)) or seconds < 0:
+        return "--:--"
+    total = int(round(float(seconds)))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 PRESETS: Dict[str, Dict[str, object]] = {
     "Default": {k: v[2] for k, v in RANGES.items()},
@@ -196,8 +208,13 @@ PRESETS: Dict[str, Dict[str, object]] = {
 class ControlGUI:
     root: tk.Tk
     control_file: Path
+    telemetry_file: Path
+    telemetry_pos: int
     vars: Dict[str, tk.DoubleVar]
     status_var: tk.StringVar
+    progress_var: tk.DoubleVar
+    progress_text_var: tk.StringVar
+    progress_detail_var: tk.StringVar
     last_payload: Dict[str, object]
     section_var: tk.StringVar
     filter_var: tk.StringVar
@@ -233,6 +250,36 @@ class ControlGUI:
         self.last_payload = controls
         self.status_var.set(f"Wrote: {self.control_file}")
 
+    def poll_telemetry(self) -> None:
+        try:
+            if not self.telemetry_file.exists():
+                self.telemetry_file.parent.mkdir(parents=True, exist_ok=True)
+                self.telemetry_file.write_text("", encoding="utf-8")
+            with self.telemetry_file.open("r", encoding="utf-8") as f:
+                f.seek(self.telemetry_pos)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    self.telemetry_pos = f.tell()
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, dict) or row.get("where") != "progress":
+                        continue
+                    percent = row.get("percent", 0.0)
+                    if isinstance(percent, (int, float)):
+                        self.progress_var.set(max(0.0, min(100.0, float(percent))))
+                    stage = str(row.get("stage", ""))
+                    eta = format_eta(row.get("eta_sec"))
+                    self.progress_text_var.set(f"{self.progress_var.get():5.1f}%  {stage}  ETA {eta}")
+                    detail = str(row.get("detail", ""))
+                    self.progress_detail_var.set(detail if detail else f"Telemetry: {self.telemetry_file}")
+        except OSError as exc:
+            self.progress_detail_var.set(f"Telemetry unavailable: {exc}")
+        self.root.after(500, self.poll_telemetry)
+
     def apply_preset(self, preset_name: str) -> None:
         data = PRESETS.get(preset_name, PRESETS["Default"])
         for key, var in self.vars.items():
@@ -250,6 +297,7 @@ class ControlGUI:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Realtime GUI for cutup.py live-control JSON file")
     p.add_argument("--control-file", default="live_control.json", help="Path to write live control JSON")
+    p.add_argument("--telemetry-file", default="", help="Path to read live progress telemetry JSONL. Defaults beside --control-file.")
     p.add_argument("--title", default="Cutup Live Control", help="Window title")
     return p.parse_args()
 
@@ -258,6 +306,7 @@ def main() -> None:
     args = parse_args()
     ensure_tk()
     control_file = Path(args.control_file).expanduser().resolve()
+    telemetry_file = Path(args.telemetry_file).expanduser().resolve() if args.telemetry_file else control_file.with_name(f"{control_file.stem}_telemetry.jsonl")
 
     root = tk.Tk()
     root.title(args.title)
@@ -273,6 +322,9 @@ def main() -> None:
     ).pack(anchor="w", pady=(0, 10))
 
     status_var = tk.StringVar(value=f"Control file: {control_file}")
+    progress_var = tk.DoubleVar(value=0.0)
+    progress_text_var = tk.StringVar(value="  0.0%  waiting  ETA --:--")
+    progress_detail_var = tk.StringVar(value=f"Telemetry: {telemetry_file}")
 
     preset_row = ttk.Frame(frame)
     preset_row.pack(fill=tk.X, pady=(0, 8))
@@ -293,8 +345,13 @@ def main() -> None:
     gui = ControlGUI(
         root=root,
         control_file=control_file,
+        telemetry_file=telemetry_file,
+        telemetry_pos=0,
         vars=vars_map,
         status_var=status_var,
+        progress_var=progress_var,
+        progress_text_var=progress_text_var,
+        progress_detail_var=progress_detail_var,
         last_payload={},
         section_var=section_var,
         filter_var=filter_var,
@@ -366,9 +423,16 @@ def main() -> None:
     ttk.Checkbutton(conductor, text="Burst now", variable=burst_var, command=gui.write_payload).grid(row=1, column=0, sticky="w", pady=(6, 0))
     ttk.Checkbutton(conductor, text="Panic silence", variable=panic_var, command=gui.write_payload).grid(row=1, column=1, sticky="w", pady=(6, 0))
 
+    progress_frame = ttk.LabelFrame(frame, text="Render progress", padding=8)
+    progress_frame.pack(fill=tk.X, pady=(8, 8))
+    progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=100.0)
+    progress_bar.pack(fill=tk.X)
+    ttk.Label(progress_frame, textvariable=progress_text_var).pack(anchor="w", pady=(4, 0))
+    ttk.Label(progress_frame, textvariable=progress_detail_var).pack(anchor="w")
+
     cmd = (
         f"python PY/cutup.py --mode both --input ./samples --sectional "
-        f"--live-control-file {control_file} --live-control-poll-ms 120"
+        f"--live-control-file {control_file} --live-telemetry-jsonl {telemetry_file} --live-control-poll-ms 120"
     )
     ttk.Label(frame, text="Run cutup with:", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(8, 2))
     cmd_box = tk.Text(frame, height=2, wrap="word")
@@ -383,6 +447,7 @@ def main() -> None:
     sec_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
     gui.write_payload()
+    gui.poll_telemetry()
     root.mainloop()
 
 
