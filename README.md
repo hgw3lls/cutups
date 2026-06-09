@@ -388,6 +388,7 @@ The GUI provides:
 - conductor controls: force section, hold section, burst-now, panic-silence
 - one-click presets (`Default`, `Bureaucratic Pressure`, `Ghost Broadcast`, `Collapse Ritual`)
 - input/output/baseline selectors and Start/Stop render buttons for local audio renders
+- semi-live renders that write short chunks into a cumulative playable WAV track while the job is still running
 - command preview plus progress/ETA from the matching telemetry JSONL file
 - immediate JSON writes compatible with `cutup.py` live polling
 
@@ -406,6 +407,8 @@ Inside your `--output` directory you will usually see:
 - `audio_cutups/cutup_XX/cutup_XX_events.csv`
 - `audio_cutups/cutup_XX/cutup_XX_plan.json`
 - `audio_cutups/cutup_XX/cutup_XX_score.txt`
+- `audio_cutups/cutup_XX/cutup_XX_live_track.wav` and `audio_cutups/cutup_XX/chunks/` (when `--semi-live` is set)
+- `audio_cutups/cutup_XX/cutup_XX_semi_live.json` (when `--semi-live` is set)
 - `audio_analysis_cache.json` (when `--analysis-cache auto` is set)
 - `run_summary.txt` (when `--export-debug-summary` is enabled)
 
@@ -437,6 +440,9 @@ CLI flags:
 - `--live-control-poll-ms <ms>`: poll interval (minimum `30`).
 - `--live-telemetry-jsonl <path>`: append runtime state snapshots/events as JSONL.
 - `--no-progress`: disable the terminal progress bar. By default, interactive terminal runs show stage, percent, and ETA on stderr.
+- `--semi-live`: render audio variants as short chunks and rewrite a cumulative playable WAV track after each chunk.
+- `--semi-live-chunk-sec <seconds>`: chunk length for `--semi-live` renders. The minimum is `1`.
+- `--semi-live-track <path.wav>`: optional path for the updating WAV track. By default it is written inside each variant folder.
 
 Supported live keys in the JSON file:
 
@@ -476,6 +482,7 @@ Notes:
 - Uses Python stdlib `tkinter` (no extra package installs needed on most desktop Python setups).
 - Writes the same JSON schema accepted by `--live-control-file`.
 - Also reads progress telemetry when `cutup.py` is run with the matching `--live-telemetry-jsonl` path.
+- Enables semi-live track rendering by default for GUI-launched renders. The growing track path appears in the progress panel as chunks finish; use `Open track` to audition the latest written WAV.
 
 ```bash
 python PY/live_control_gui.py \

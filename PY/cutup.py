@@ -987,6 +987,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--overwrite", action="store_true", help="Allow writing into a non-empty output folder.")
     p.add_argument("--no-progress", action="store_true", help="Disable terminal progress bar output.")
     p.add_argument("--preview-duration", type=float, default=0.0, help="Also export a short preview WAV from the start of each audio master; 0 disables.")
+    p.add_argument("--semi-live", action="store_true", help="Render audio variants as short chunks and update a cumulative playable WAV track after each chunk.")
+    p.add_argument("--semi-live-chunk-sec", type=float, default=8.0, help="Chunk length in seconds for --semi-live audio rendering.")
+    p.add_argument("--semi-live-track", default="", help="Optional output path for the updating semi-live WAV track. Defaults inside each variant folder.")
     p.add_argument("--analysis-cache", default="", help="Write/update a lightweight JSON source analysis cache for audio mode. Use 'auto' for output/audio_analysis_cache.json.")
 
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
@@ -1228,6 +1231,12 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--duration must be > 0")
     if args.preview_duration < 0:
         raise SystemExit("--preview-duration must be >= 0")
+    if args.semi_live_chunk_sec <= 0:
+        raise SystemExit("--semi-live-chunk-sec must be > 0")
+    if args.semi_live_chunk_sec < 1.0:
+        raise SystemExit("--semi-live-chunk-sec must be >= 1.0")
+    if args.semi_live_track and Path(args.semi_live_track).expanduser().resolve().suffix.lower() != ".wav":
+        raise SystemExit("--semi-live-track must be a .wav path")
     if args.baseline_beat:
         baseline_path = Path(args.baseline_beat).expanduser().resolve()
         if not baseline_path.exists():
@@ -2146,6 +2155,10 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"output: {output_root}")
     print(f"duration: {args.duration}s")
     print(f"preview_duration: {args.preview_duration}s" if args.preview_duration > 0 else "preview_duration: off")
+    print(f"semi_live: {'on' if args.semi_live else 'off'}")
+    if args.semi_live:
+        print(f"semi_live_chunk_sec: {args.semi_live_chunk_sec:g}")
+        print(f"semi_live_track: {Path(args.semi_live_track).expanduser().resolve() if args.semi_live_track else 'auto'}")
     analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
     print(f"analysis_cache: {analysis_cache if analysis_cache else 'off'}")
     print(f"source_manifest: {Path(args.source_manifest).expanduser().resolve() if args.source_manifest else 'off'}")
@@ -4826,6 +4839,9 @@ def build_audio_plan(
             "baseline_beat_inferred_bpm": float(getattr(args, "baseline_beat_inferred_bpm", 0.0) or 0.0),
             "sample_rate": int(args.sample_rate),
             "master_gain": float(args.master_gain),
+            "semi_live": bool(getattr(args, "semi_live", False)),
+            "semi_live_chunk_sec": float(getattr(args, "semi_live_chunk_sec", 0.0) or 0.0),
+            "semi_live_track": str(getattr(args, "semi_live_track_resolved", "") or getattr(args, "semi_live_track", "") or ""),
             "min_frag_ms": min_frag_ms,
             "max_frag_ms": max_frag_ms,
             "bpm": float(args.bpm),
@@ -5229,6 +5245,41 @@ def normalize_master(audio: AudioSegment, master_gain: float) -> AudioSegment:
     return compress_dynamic_range(audio, threshold=-22.0, ratio=2.4, attack=8, release=140).apply_gain(master_gain)
 
 
+def mix_master_layers(
+    main: AudioSegment,
+    cuts: AudioSegment,
+    ghosts: AudioSegment,
+    hiss: AudioSegment,
+    baseline_bed: Optional[AudioSegment],
+    args: argparse.Namespace,
+) -> AudioSegment:
+    total_ms = max(len(main), len(cuts), len(ghosts), len(hiss), len(baseline_bed) if baseline_bed is not None else 0)
+    master = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
+    master = master.overlay(hiss[:total_ms], position=0)
+    if baseline_bed is not None:
+        master = master.overlay(baseline_bed[:total_ms], position=0)
+    master = master.overlay(ghosts[:total_ms] - 2, position=0).overlay(cuts[:total_ms] + 1, position=0).overlay(main[:total_ms] + 2, position=0)
+    return normalize_master(master, args.master_gain)
+
+
+def offset_event(event: Event, offset_ms: int) -> Event:
+    data = dict(event.__dict__)
+    for key in ("start_ms", "end_ms"):
+        data[key] = int(data.get(key, 0)) + offset_ms
+    data["baseline_placement_original_start_ms"] = int(data.get("baseline_placement_original_start_ms", 0)) + offset_ms
+    return Event(**data)
+
+
+def resolve_semi_live_track_path(args: argparse.Namespace, variant_dir: Path, variant_name: str) -> Path:
+    raw = str(getattr(args, "semi_live_track", "") or "").strip()
+    if not raw:
+        return variant_dir / f"{variant_name}_live_track.wav"
+    path = Path(raw).expanduser().resolve()
+    if variant_name != "cutup_01":
+        path = path.with_name(f"{path.stem}_{variant_name}{path.suffix}")
+    return path
+
+
 def build_variant(
     samples: List[SampleFile],
     output_root: Path,
@@ -5281,12 +5332,7 @@ def build_variant(
         )
     setattr(args, "baseline_beat_duck_windows", baseline_duck_count)
 
-    master = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
-    master = master.overlay(hiss, position=0)
-    if baseline_bed is not None:
-        master = master.overlay(baseline_bed, position=0)
-    master = master.overlay(ghosts - 2, position=0).overlay(cuts + 1, position=0).overlay(main + 2, position=0)
-    master = normalize_master(master, args.master_gain)
+    master = mix_master_layers(main, cuts, ghosts, hiss, baseline_bed, args)
 
     if progress:
         progress.update_span(progress_span, 0.84, "audio", f"{variant_name} exporting stems", force=True)
@@ -5322,6 +5368,180 @@ def build_variant(
         summary.output_paths.append(str(preview_path))
     if progress:
         progress.update_span(progress_span, 1.0, "audio", f"{variant_name} complete", force=True)
+
+
+def build_semi_live_variant(
+    samples: List[SampleFile],
+    output_root: Path,
+    variant_idx: int,
+    args: argparse.Namespace,
+    summary: RunSummary,
+    live: Optional[LiveControlState] = None,
+    beat_jump: Optional[BeatJumpState] = None,
+    baseline_beat: Optional[BaselineBeat] = None,
+    progress: Optional[ProgressReporter] = None,
+    progress_span: Tuple[float, float] = (0.0, 1.0),
+) -> None:
+    total_ms = max(2000, int(max(1.0, args.duration) * 1000))
+    chunk_ms = max(1000, min(total_ms, int(round(float(args.semi_live_chunk_sec) * 1000))))
+    chunk_count = max(1, int(math.ceil(total_ms / float(chunk_ms))))
+    min_frag_ms = max(10, int(max(0.01, args.min_frag) * 1000))
+    max_frag_ms = max(min_frag_ms, int(max(args.min_frag, args.max_frag) * 1000))
+
+    variant_name = f"cutup_{variant_idx:02d}"
+    variant_dir = output_root / variant_name
+    stems_dir = variant_dir / "stems"
+    chunks_dir = variant_dir / "chunks"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+    live_track_path = resolve_semi_live_track_path(args, variant_dir, variant_name)
+    if live_track_path.exists() and not args.overwrite:
+        raise SystemExit(f"--semi-live-track already exists: {live_track_path}. Pass --overwrite or choose a new path.")
+    live_track_path.parent.mkdir(parents=True, exist_ok=True)
+    setattr(args, "semi_live_track_resolved", str(live_track_path))
+
+    if progress:
+        progress.update_span(progress_span, 0.0, "audio", f"{variant_name} semi-live preparing", force=True)
+
+    baseline_bed_full = render_baseline_beat_bed(baseline_beat, total_ms) if baseline_beat else None
+    full_baseline_profile = baseline_grid_profile(baseline_bed_full, args, total_ms)
+
+    main_stem = AudioSegment.silent(duration=0, frame_rate=args.sample_rate).set_channels(2)
+    cuts_stem = AudioSegment.silent(duration=0, frame_rate=args.sample_rate).set_channels(2)
+    ghosts_stem = AudioSegment.silent(duration=0, frame_rate=args.sample_rate).set_channels(2)
+    hiss_stem = AudioSegment.silent(duration=0, frame_rate=args.sample_rate).set_channels(2)
+    baseline_stem = AudioSegment.silent(duration=0, frame_rate=args.sample_rate).set_channels(2) if baseline_bed_full is not None else None
+    live_track = AudioSegment.silent(duration=0, frame_rate=args.sample_rate).set_channels(2)
+    all_events: List[Event] = []
+    chunk_rows: List[Dict[str, object]] = []
+    baseline_duck_count_total = 0
+
+    for chunk_idx in range(1, chunk_count + 1):
+        chunk_start = (chunk_idx - 1) * chunk_ms
+        chunk_len = min(chunk_ms, total_ms - chunk_start)
+        if chunk_len <= 0:
+            continue
+        chunk_name = f"{variant_name}_chunk_{chunk_idx:03d}"
+        chunk_args = argparse.Namespace(**vars(args))
+        chunk_args.duration = chunk_len / 1000.0
+        chunk_progress = progress_child_span(progress_span, 0.05 + 0.70 * ((chunk_idx - 1) / chunk_count), 0.05 + 0.70 * (chunk_idx / chunk_count))
+        if progress:
+            progress.update_span(progress_span, 0.05 + 0.70 * ((chunk_idx - 1) / chunk_count), "audio", f"{chunk_name} rendering", force=True)
+
+        baseline_chunk = baseline_bed_full[chunk_start : chunk_start + chunk_len] if baseline_bed_full is not None else None
+        baseline_profile = baseline_grid_profile(baseline_chunk, chunk_args, chunk_len)
+        setattr(chunk_args, "baseline_grid_summary", baseline_profile.get("summary", {}))
+        main, cuts, ghosts, events = place_events(
+            samples,
+            chunk_len,
+            chunk_args,
+            min_frag_ms,
+            max_frag_ms,
+            live=live,
+            beat_jump=beat_jump,
+            baseline_grid=baseline_profile,
+            progress=progress,
+            progress_span=chunk_progress,
+            progress_label=chunk_name,
+        )
+        hiss = make_hiss(chunk_len, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=chunk_len, frame_rate=args.sample_rate).set_channels(2)
+        baseline_duck_count = 0
+        if baseline_chunk is not None:
+            baseline_chunk, baseline_duck_count = duck_baseline_beat_bed(
+                baseline_chunk,
+                events,
+                float(getattr(args, "baseline_beat_duck_db", 0.0) or 0.0),
+                int(getattr(args, "baseline_beat_duck_ms", 80) or 0),
+            )
+        baseline_duck_count_total += baseline_duck_count
+        chunk_master = mix_master_layers(main, cuts, ghosts, hiss, baseline_chunk, args)[:chunk_len]
+        chunk_path = chunks_dir / f"{chunk_name}.wav"
+        chunk_master.export(chunk_path, format="wav")
+
+        main_stem += main[:chunk_len]
+        cuts_stem += cuts[:chunk_len]
+        ghosts_stem += ghosts[:chunk_len]
+        hiss_stem += hiss[:chunk_len]
+        if baseline_stem is not None and baseline_chunk is not None:
+            baseline_stem += baseline_chunk[:chunk_len]
+        live_track += chunk_master
+        live_track.export(live_track_path, format="wav")
+
+        offset_events = [offset_event(event, chunk_start) for event in events]
+        all_events.extend(offset_events)
+        chunk_row = {
+            "chunk_index": chunk_idx,
+            "chunk_count": chunk_count,
+            "start_ms": chunk_start,
+            "end_ms": chunk_start + chunk_len,
+            "duration_ms": chunk_len,
+            "chunk_path": str(chunk_path),
+            "live_track_path": str(live_track_path),
+            "rendered_ms": len(live_track),
+            "event_count": len(events),
+            "complete": chunk_idx == chunk_count,
+        }
+        chunk_rows.append(chunk_row)
+        if live and live.enabled:
+            live.telemetry("semi_live_chunk", variant=variant_name, **chunk_row)
+        if progress:
+            progress.update_span(progress_span, 0.05 + 0.70 * (chunk_idx / chunk_count), "audio", f"{chunk_name} added to live track", force=True)
+
+    setattr(args, "baseline_grid_summary", full_baseline_profile.get("summary", {}))
+    setattr(args, "baseline_beat_duck_windows", baseline_duck_count_total)
+
+    if progress:
+        progress.update_span(progress_span, 0.82, "audio", f"{variant_name} exporting stems", force=True)
+    main_stem[:total_ms].export(stems_dir / "voice_main.wav", format="wav")
+    cuts_stem[:total_ms].export(stems_dir / "voice_cuts.wav", format="wav")
+    ghosts_stem[:total_ms].export(stems_dir / "ghosts.wav", format="wav")
+    hiss_stem[:total_ms].export(stems_dir / "hiss_bed.wav", format="wav")
+    if baseline_stem is not None:
+        baseline_stem[:total_ms].export(stems_dir / "baseline_beat.wav", format="wav")
+
+    master_path = variant_dir / f"{variant_name}_master.wav"
+    event_path = variant_dir / f"{variant_name}_events.csv"
+    plan_path = variant_dir / f"{variant_name}_plan.json"
+    score_path = variant_dir / f"{variant_name}_score.txt"
+    semi_live_manifest_path = variant_dir / f"{variant_name}_semi_live.json"
+    if progress:
+        progress.update_span(progress_span, 0.9, "audio", f"{variant_name} finalizing live track", force=True)
+    live_track = live_track[:total_ms]
+    live_track.export(live_track_path, format="wav")
+    live_track.export(master_path, format="wav")
+    preview_path: Optional[Path] = None
+    preview_ms = preview_duration_ms(args, len(live_track))
+    if preview_ms > 0:
+        preview_path = variant_dir / f"{variant_name}_preview.wav"
+        live_track[:preview_ms].export(preview_path, format="wav")
+
+    if progress:
+        progress.update_span(progress_span, 0.96, "audio", f"{variant_name} writing plan", force=True)
+    export_manifest(event_path, all_events)
+    export_audio_plan(plan_path, build_audio_plan(variant_name, all_events, args, total_ms, min_frag_ms, max_frag_ms))
+    score_path.write_text(build_section_score(all_events), encoding="utf-8")
+    semi_live_manifest = {
+        "kind": "cutups.semi_live_track",
+        "version": 1,
+        "variant": variant_name,
+        "track_path": str(live_track_path),
+        "master_path": str(master_path),
+        "chunk_sec": float(args.semi_live_chunk_sec),
+        "chunk_count": len(chunk_rows),
+        "duration_ms": total_ms,
+        "chunks": chunk_rows,
+    }
+    semi_live_manifest_path.write_text(json.dumps(semi_live_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    summary.audio_events += len(all_events)
+    summary.section_distribution.update([event.section for event in all_events])
+    summary.recurring_sources.update([event.source_basename for event in all_events if event.recurrence_index > 1])
+    summary.output_paths.extend([str(live_track_path), str(master_path), str(event_path), str(plan_path), str(score_path), str(semi_live_manifest_path)])
+    if preview_path:
+        summary.output_paths.append(str(preview_path))
+    if progress:
+        progress.update_span(progress_span, 1.0, "audio", f"{variant_name} semi-live complete", force=True)
 
 
 def run_audio_mode(
@@ -5405,7 +5625,8 @@ def run_audio_mode(
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
         variant_span = progress_child_span(progress_span, 0.16 + 0.84 * ((i - 1) / variant_count), 0.16 + 0.84 * (i / variant_count))
-        build_variant(
+        builder = build_semi_live_variant if bool(getattr(local_args, "semi_live", False)) else build_variant
+        builder(
             samples,
             audio_out,
             i,

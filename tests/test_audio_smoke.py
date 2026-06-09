@@ -323,6 +323,87 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(len(sample["similarity_vector"]["values"]), len(sample_fields))
             self.assertTrue(all(0 <= value <= 1 for value in sample["similarity_vector"]["values"]))
 
+    def test_audio_cli_semi_live_updates_track_and_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice_phrase.wav"
+            output = root / "semi_live_render"
+            telemetry = root / "semi_live_telemetry.jsonl"
+            _write_tone_wav(source, duration_s=3.0)
+
+            self.run_cutup(
+                [
+                    "--mode",
+                    "audio",
+                    "--preset",
+                    "spoken-word-cutup",
+                    "--input",
+                    str(source),
+                    "--output",
+                    str(output),
+                    "--duration",
+                    "3",
+                    "--semi-live",
+                    "--semi-live-chunk-sec",
+                    "1",
+                    "--preview-duration",
+                    "1",
+                    "--live-telemetry-jsonl",
+                    str(telemetry),
+                    "--seed",
+                    "404",
+                    "--overwrite",
+                ]
+            )
+
+            variant = output / "audio_cutups" / "cutup_01"
+            live_track = variant / "cutup_01_live_track.wav"
+            master = variant / "cutup_01_master.wav"
+            preview = variant / "cutup_01_preview.wav"
+            chunks_dir = variant / "chunks"
+            semi_live_manifest = variant / "cutup_01_semi_live.json"
+            events = variant / "cutup_01_events.csv"
+            plan = variant / "cutup_01_plan.json"
+            live_track_resolved = str(live_track.resolve())
+            master_resolved = str(master.resolve())
+            for path in (live_track, master, preview, chunks_dir, semi_live_manifest, events, plan, telemetry):
+                self.assertTrue(path.exists(), path)
+
+            chunks = sorted(chunks_dir.glob("*.wav"))
+            self.assertEqual(len(chunks), 3)
+            self.assertEqual(_wav_info(live_track)[:2], (2, 44100))
+            self.assertAlmostEqual(_wav_info(live_track)[2], 3.0, places=2)
+            self.assertEqual(_wav_info(master)[:2], (2, 44100))
+            self.assertAlmostEqual(_wav_info(master)[2], 3.0, places=2)
+            self.assertAlmostEqual(_wav_info(preview)[2], 1.0, places=2)
+
+            manifest_payload = json.loads(semi_live_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(manifest_payload["kind"], "cutups.semi_live_track")
+            self.assertEqual(manifest_payload["track_path"], live_track_resolved)
+            self.assertEqual(manifest_payload["master_path"], master_resolved)
+            self.assertEqual(manifest_payload["chunk_count"], 3)
+            self.assertEqual(len(manifest_payload["chunks"]), 3)
+            self.assertTrue(all(Path(row["chunk_path"]).exists() for row in manifest_payload["chunks"]))
+            self.assertTrue(manifest_payload["chunks"][-1]["complete"])
+
+            render_plan = json.loads(plan.read_text(encoding="utf-8"))
+            self.assertTrue(render_plan["config"]["semi_live"])
+            self.assertEqual(render_plan["config"]["semi_live_chunk_sec"], 1.0)
+            self.assertEqual(render_plan["config"]["semi_live_track"], live_track_resolved)
+            self.assertEqual(render_plan["duration_ms"], 3000)
+            self.assertEqual(render_plan["summary"]["event_count"], len(render_plan["events"]))
+
+            telemetry_rows = [
+                json.loads(line)
+                for line in telemetry.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            chunk_rows = [row for row in telemetry_rows if row.get("where") == "semi_live_chunk"]
+            self.assertEqual(len(chunk_rows), 3)
+            self.assertEqual(chunk_rows[-1]["live_track_path"], live_track_resolved)
+            self.assertEqual(chunk_rows[-1]["rendered_ms"], 3000)
+            self.assertTrue(chunk_rows[-1]["complete"])
+
     def test_audio_cli_uses_srt_cues_as_phrase_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

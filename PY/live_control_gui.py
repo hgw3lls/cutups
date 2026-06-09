@@ -93,6 +93,8 @@ def build_render_command(
     bpm: str = "",
     slice_grid: str = "off",
     baseline_beat: str = "",
+    semi_live: bool = False,
+    semi_live_chunk_sec: str = "8",
 ) -> List[str]:
     cmd = [
         python_executable,
@@ -122,6 +124,8 @@ def build_render_command(
         cmd.extend(["--slice-grid", slice_grid])
     if baseline_beat.strip():
         cmd.extend(["--baseline-beat", baseline_beat.strip()])
+    if semi_live:
+        cmd.extend(["--semi-live", "--semi-live-chunk-sec", semi_live_chunk_sec.strip() or "8"])
     return cmd
 
 
@@ -278,6 +282,9 @@ class ControlGUI:
     bpm_var: tk.StringVar
     slice_grid_var: tk.StringVar
     baseline_var: tk.StringVar
+    semi_live_var: tk.BooleanVar
+    chunk_sec_var: tk.StringVar
+    track_path_var: tk.StringVar
     command_box: Any
     last_payload: Dict[str, object]
     section_var: tk.StringVar
@@ -332,16 +339,25 @@ class ControlGUI:
                         row = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if not isinstance(row, dict) or row.get("where") != "progress":
+                    if not isinstance(row, dict):
                         continue
-                    percent = row.get("percent", 0.0)
-                    if isinstance(percent, (int, float)):
-                        self.progress_var.set(max(0.0, min(100.0, float(percent))))
-                    stage = str(row.get("stage", ""))
-                    eta = format_eta(row.get("eta_sec"))
-                    self.progress_text_var.set(f"{self.progress_var.get():5.1f}%  {stage}  ETA {eta}")
-                    detail = str(row.get("detail", ""))
-                    self.progress_detail_var.set(detail if detail else f"Telemetry: {self.telemetry_file}")
+                    if row.get("where") == "progress":
+                        percent = row.get("percent", 0.0)
+                        if isinstance(percent, (int, float)):
+                            self.progress_var.set(max(0.0, min(100.0, float(percent))))
+                        stage = str(row.get("stage", ""))
+                        eta = format_eta(row.get("eta_sec"))
+                        self.progress_text_var.set(f"{self.progress_var.get():5.1f}%  {stage}  ETA {eta}")
+                        detail = str(row.get("detail", ""))
+                        self.progress_detail_var.set(detail if detail else f"Telemetry: {self.telemetry_file}")
+                    elif row.get("where") == "semi_live_chunk":
+                        track_path = str(row.get("live_track_path", row.get("track_path", "")) or "")
+                        chunk_index = row.get("chunk_index", 0)
+                        chunk_count = row.get("chunk_count", 0)
+                        rendered_ms = row.get("rendered_ms", 0)
+                        if track_path:
+                            self.track_path_var.set(track_path)
+                        self.progress_detail_var.set(f"Semi-live chunk {chunk_index}/{chunk_count} rendered {rendered_ms} ms")
         except OSError as exc:
             self.progress_detail_var.set(f"Telemetry unavailable: {exc}")
         self.root.after(500, self.poll_telemetry)
@@ -359,6 +375,8 @@ class ControlGUI:
             bpm=self.bpm_var.get().strip(),
             slice_grid=self.slice_grid_var.get().strip() or "off",
             baseline_beat=self.baseline_var.get().strip(),
+            semi_live=bool(self.semi_live_var.get()),
+            semi_live_chunk_sec=self.chunk_sec_var.get().strip() or "8",
         )
 
     def update_command_preview(self, *_: object) -> None:
@@ -385,6 +403,25 @@ class ControlGUI:
         if chosen:
             self.baseline_var.set(chosen)
 
+    def open_track(self) -> None:
+        raw = self.track_path_var.get().strip()
+        if not raw or raw == "Track: waiting":
+            self.status_var.set("No semi-live track available yet")
+            return
+        path = Path(raw)
+        if not path.exists():
+            self.status_var.set(f"Track not written yet: {path}")
+            return
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            elif sys.platform.startswith("win"):
+                subprocess.Popen(["cmd", "/c", "start", "", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except OSError as exc:
+            self.status_var.set(f"Could not open track: {exc}")
+
     def start_render(self) -> None:
         if self.render_process and self.render_process.poll() is None:
             self.status_var.set("Render already running")
@@ -393,6 +430,7 @@ class ControlGUI:
         self.progress_var.set(0.0)
         self.progress_text_var.set("  0.0%  starting  ETA --:--")
         self.progress_detail_var.set(f"Telemetry: {self.telemetry_file}")
+        self.track_path_var.set("Track: waiting")
         self.telemetry_pos = 0
         self.telemetry_file.parent.mkdir(parents=True, exist_ok=True)
         self.telemetry_file.write_text("", encoding="utf-8")
@@ -484,6 +522,9 @@ def main() -> None:
     bpm_var = tk.StringVar(value="")
     slice_grid_var = tk.StringVar(value="off")
     baseline_var = tk.StringVar(value="")
+    semi_live_var = tk.BooleanVar(value=True)
+    chunk_sec_var = tk.StringVar(value="8")
+    track_path_var = tk.StringVar(value="Track: waiting")
 
     preset_row = ttk.Frame(frame)
     preset_row.pack(fill=tk.X, pady=(0, 8))
@@ -518,6 +559,9 @@ def main() -> None:
         bpm_var=bpm_var,
         slice_grid_var=slice_grid_var,
         baseline_var=baseline_var,
+        semi_live_var=semi_live_var,
+        chunk_sec_var=chunk_sec_var,
+        track_path_var=track_path_var,
         command_box=None,
         last_payload={},
         section_var=section_var,
@@ -613,14 +657,20 @@ def main() -> None:
     ttk.Button(render_frame, text="Choose", command=gui.choose_baseline).grid(row=3, column=2, sticky="e", pady=(6, 0))
     render_frame.columnconfigure(1, weight=1)
 
-    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=4, column=0, sticky="nw", pady=(8, 0))
+    semi_live_row = ttk.Frame(render_frame)
+    semi_live_row.grid(row=4, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    ttk.Checkbutton(semi_live_row, text="Semi-live track", variable=semi_live_var, command=gui.update_command_preview).pack(side=tk.LEFT)
+    ttk.Label(semi_live_row, text="Chunk sec").pack(side=tk.LEFT, padx=(16, 4))
+    ttk.Entry(semi_live_row, textvariable=chunk_sec_var, width=8).pack(side=tk.LEFT)
+
+    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=5, column=0, sticky="nw", pady=(8, 0))
     command_box = tk.Text(render_frame, height=3, wrap="word")
     gui.command_box = command_box
-    command_box.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
+    command_box.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
     command_box.configure(state="disabled")
 
     launch_row = ttk.Frame(render_frame)
-    launch_row.grid(row=5, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    launch_row.grid(row=6, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
     ttk.Button(launch_row, text="Start render", command=gui.start_render).pack(side=tk.LEFT)
     ttk.Button(launch_row, text="Stop", command=gui.stop_render).pack(side=tk.LEFT, padx=(8, 0))
 
@@ -630,13 +680,15 @@ def main() -> None:
     progress_bar.pack(fill=tk.X)
     ttk.Label(progress_frame, textvariable=progress_text_var).pack(anchor="w", pady=(4, 0))
     ttk.Label(progress_frame, textvariable=progress_detail_var).pack(anchor="w")
+    ttk.Label(progress_frame, textvariable=track_path_var).pack(anchor="w")
+    ttk.Button(progress_frame, text="Open track", command=gui.open_track).pack(anchor="w", pady=(4, 0))
 
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(10, 0))
 
     preset_combo.bind("<<ComboboxSelected>>", lambda _e: gui.apply_preset(preset_var.get()))
     sec_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
-    for var in (input_var, output_var, preset_var, duration_var, bpm_var, slice_grid_var, baseline_var):
+    for var in (input_var, output_var, preset_var, duration_var, bpm_var, slice_grid_var, baseline_var, chunk_sec_var):
         var.trace_add("write", gui.update_command_preview)
 
     gui.write_payload()

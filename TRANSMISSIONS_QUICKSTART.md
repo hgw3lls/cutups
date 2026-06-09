@@ -327,6 +327,25 @@ python PY/cutup.py --mode audio --input ./samples --output out/live_progress --l
 
 The GUI can also launch local audio renders directly. Choose input/output paths, preset, duration, optional BPM/grid, and optional baseline beat, then use Start render. It writes the same live-control JSON and telemetry paths shown above, so sliders and progress continue to work during the render.
 
+GUI-launched renders enable semi-live tracks by default: `cutups` renders short chunks, appends them to `cutup_XX_live_track.wav`, and updates the path in the GUI progress panel as the track grows. Use the Chunk sec field to control how often the playable track is refreshed.
+
+CLI equivalent:
+
+```bash
+python PY/cutup.py \
+  --mode audio \
+  --preset signal-breach \
+  --input ./samples \
+  --output out/semi_live_breach \
+  --duration 90 \
+  --semi-live \
+  --semi-live-chunk-sec 8 \
+  --live-control-file ./live_control.json \
+  --live-telemetry-jsonl ./live_control_telemetry.jsonl
+```
+
+Semi-live renders also write each source chunk to `audio_cutups/cutup_XX/chunks/` and a `cutup_XX_semi_live.json` manifest for later inspection.
+
 Each audio variant also writes `cutup_XX_plan.json`, a structured render plan with section windows, event choices, source/layer summaries, transform tags, and per-event `planner` diagnostics. Use it when comparing whether a cutup is being constructed intelligently, not just whether it sounds good. The matching `cutup_XX_events.csv` includes flat diagnostic columns for spreadsheet review.
 
 Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again.

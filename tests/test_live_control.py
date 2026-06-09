@@ -454,12 +454,17 @@ class LiveControlTests(unittest.TestCase):
             bpm="120",
             slice_grid="1/16",
             baseline_beat="./beat.wav",
+            semi_live=True,
+            semi_live_chunk_sec="6",
         )
         self.assertEqual(cmd[:5], ["python", "/repo/PY/cutup.py", "--mode", "audio", "--input"])
         self.assertIn("--preset", cmd)
         self.assertIn("beat-cutup", cmd)
         self.assertIn("--baseline-beat", cmd)
         self.assertIn("./beat.wav", cmd)
+        self.assertIn("--semi-live", cmd)
+        self.assertIn("--semi-live-chunk-sec", cmd)
+        self.assertIn("6", cmd)
 
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(
