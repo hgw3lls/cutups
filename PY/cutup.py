@@ -443,6 +443,24 @@ RECIPE_COMMANDS: Dict[str, Tuple[str, str]] = {
         "  --preview-duration 12 \\\n"
         "  --seed 230",
     ),
+    "beat-baseline": (
+        "Use one beat loop as the timing bed while cutting voice, noise, or mixed sources against it.",
+        "cutups \\\n"
+        "  --mode audio \\\n"
+        "  --preset beat-cutup \\\n"
+        "  --input ../cutups_qa_sources/voice \\\n"
+        "  --baseline-beat ../cutups_qa_sources/loops/drum_pulse_120.wav \\\n"
+        "  --baseline-beat-bars 4 \\\n"
+        "  --baseline-beat-gain -10 \\\n"
+        "  --slice-grid 1/16 \\\n"
+        "  --stutter-rate 0.45 \\\n"
+        "  --repeat-rate 0.30 \\\n"
+        "  --mute-rate 0.12 \\\n"
+        "  --output out/beat_baseline \\\n"
+        "  --duration 32 \\\n"
+        "  --preview-duration 12 \\\n"
+        "  --seed 233",
+    ),
     "beat-similarity": (
         "Beat-grid render with source analysis, similarity jumps, and novelty bias.",
         "cutups \\\n"
@@ -555,6 +573,15 @@ class SampleFile:
 
     def has_cue(self) -> bool:
         return self.cue_end_ms > self.cue_start_ms
+
+
+@dataclass(frozen=True)
+class BaselineBeat:
+    path: Path
+    audio: Any
+    source_duration_ms: int
+    gain_db: float
+    inferred_bpm: float = 0.0
 
 
 @dataclass
@@ -832,6 +859,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample-rate", type=int, default=44100, help="Export sample rate.")
     p.add_argument("--master-gain", type=float, default=-3.0, help="Master gain in dB.")
     p.add_argument("--bed-noise", action=argparse.BooleanOptionalAction, default=False, help="Add synthetic hiss bed.")
+    p.add_argument("--baseline-beat", default="", help="Optional beat/loop audio file to use as a continuous timing bed; it is not added to the cutup source pool.")
+    p.add_argument("--baseline-beat-gain", type=float, default=-9.0, help="Gain in dB applied to the baseline beat bed before mixing.")
+    p.add_argument("--baseline-beat-bars", type=float, default=0.0, help="If >0 and --bpm is unset, infer BPM from the baseline beat length as this many 4/4 bars.")
     p.add_argument("--min-frag", type=float, default=0.05, help="Minimum fragment size in seconds.")
     p.add_argument("--max-frag", type=float, default=4.2, help="Maximum fragment size in seconds.")
     p.add_argument("--phrase-length", choices=sorted(PHRASE_LENGTH_RANGES), default="auto", help="Voice-oriented fragment length profile.")
@@ -1046,11 +1076,24 @@ def validate_args(args: argparse.Namespace) -> argparse.Namespace:
         raise SystemExit("--duration must be > 0")
     if args.preview_duration < 0:
         raise SystemExit("--preview-duration must be >= 0")
+    if args.baseline_beat:
+        baseline_path = Path(args.baseline_beat).expanduser().resolve()
+        if not baseline_path.exists():
+            raise SystemExit(f"--baseline-beat not found: {baseline_path}")
+        if not baseline_path.is_file() or baseline_path.suffix.lower() not in AUDIO_EXTS:
+            raise SystemExit(f"--baseline-beat must be an audio file: {baseline_path}")
+    elif args.baseline_beat_bars > 0:
+        raise SystemExit("--baseline-beat-bars requires --baseline-beat")
+    if not math.isfinite(float(args.baseline_beat_gain)):
+        raise SystemExit("--baseline-beat-gain must be a finite dB value")
+    if args.baseline_beat_bars < 0:
+        raise SystemExit("--baseline-beat-bars must be >= 0")
     if args.bpm < 0:
         raise SystemExit("--bpm must be >= 0")
     if args.bpm and not 20 <= args.bpm <= 300:
         raise SystemExit("--bpm must be 20..300, or 0 to disable beat-grid behavior")
-    if args.bpm <= 0 and args.slice_grid != "off" and "slice_grid" in getattr(args, "_explicit_args", set()):
+    baseline_can_supply_bpm = bool(args.baseline_beat and args.baseline_beat_bars > 0)
+    if args.bpm <= 0 and args.slice_grid != "off" and "slice_grid" in getattr(args, "_explicit_args", set()) and not baseline_can_supply_bpm:
         raise SystemExit("--slice-grid requires --bpm")
     if not 0.0 <= args.source_diversity <= 1.0:
         raise SystemExit("--source-diversity must be 0..1")
@@ -1816,6 +1859,17 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
     print(f"source_diversity: {args.source_diversity:.2f}")
     print(f"concrete: {args.concrete}")
     print(f"bed_noise: {args.bed_noise}")
+    if args.baseline_beat:
+        print(f"baseline_beat: {Path(args.baseline_beat).expanduser().resolve()}")
+        print(f"baseline_beat_gain: {args.baseline_beat_gain:.2f} dB")
+        if args.baseline_beat_bars > 0 and args.bpm <= 0:
+            print(f"baseline_beat_bpm: infer during render from {args.baseline_beat_bars:g} bar(s)")
+        elif args.baseline_beat_bars > 0:
+            print(f"baseline_beat_bpm: manual --bpm keeps {args.bpm:g} bpm")
+        else:
+            print("baseline_beat_bpm: off")
+    else:
+        print("baseline_beat: off")
     print(f"fragments: {args.min_frag:.3f}s..{args.max_frag:.3f}s")
     print(f"phrase_length: {args.phrase_length}")
     print(f"intelligibility: {args.intelligibility}")
@@ -3473,6 +3527,66 @@ def source_audio_for_sample(sample: SampleFile, args: argparse.Namespace) -> Aud
     return audio
 
 
+def baseline_beat_path(args: argparse.Namespace) -> Optional[Path]:
+    raw = str(getattr(args, "baseline_beat", "") or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def baseline_beat_bpm_from_duration(duration_ms: int, bars: float) -> float:
+    if duration_ms <= 0 or bars <= 0:
+        return 0.0
+    return round((float(bars) * 4.0 * 60000.0) / float(duration_ms), 3)
+
+
+def load_baseline_beat(args: argparse.Namespace) -> Optional[BaselineBeat]:
+    path = baseline_beat_path(args)
+    if path is None:
+        setattr(args, "baseline_beat_source_duration_ms", 0)
+        setattr(args, "baseline_beat_inferred_bpm", 0.0)
+        return None
+    try:
+        audio = AudioSegment.from_file(path).set_frame_rate(args.sample_rate).set_channels(2)
+    except Exception as exc:
+        raise SystemExit(f"Could not decode --baseline-beat audio file: {path}") from exc
+    source_duration_ms = len(audio)
+    if source_duration_ms <= 1:
+        raise SystemExit(f"--baseline-beat must contain usable audio: {path}")
+
+    inferred_bpm = 0.0
+    bars = float(getattr(args, "baseline_beat_bars", 0.0) or 0.0)
+    if bars > 0 and float(getattr(args, "bpm", 0.0) or 0.0) <= 0:
+        inferred_bpm = baseline_beat_bpm_from_duration(source_duration_ms, bars)
+        if not 20 <= inferred_bpm <= 300:
+            raise SystemExit(
+                f"--baseline-beat-bars inferred {inferred_bpm:g} bpm from {path.name}; "
+                "set --bpm manually or adjust --baseline-beat-bars"
+            )
+        args.bpm = inferred_bpm
+        if str(getattr(args, "slice_grid", "off") or "off") == "off" and "slice_grid" not in getattr(args, "_explicit_args", set()):
+            args.slice_grid = "1/16"
+        print(
+            f"Baseline beat BPM inferred: {inferred_bpm:g} bpm "
+            f"from {source_duration_ms} ms over {bars:g} bar(s)"
+        )
+
+    setattr(args, "baseline_beat_source_duration_ms", source_duration_ms)
+    setattr(args, "baseline_beat_inferred_bpm", inferred_bpm)
+    return BaselineBeat(
+        path=path,
+        audio=audio,
+        source_duration_ms=source_duration_ms,
+        gain_db=float(getattr(args, "baseline_beat_gain", -9.0) or 0.0),
+        inferred_bpm=inferred_bpm,
+    )
+
+
+def render_baseline_beat_bed(baseline: BaselineBeat, total_ms: int) -> AudioSegment:
+    loops = max(1, int(math.ceil(total_ms / float(max(1, baseline.source_duration_ms)))))
+    return (baseline.audio * loops)[:total_ms].apply_gain(baseline.gain_db)
+
+
 def change_speed(audio: AudioSegment, speed: float) -> AudioSegment:
     if abs(speed - 1.0) < 1e-6:
         return audio
@@ -3893,6 +4007,11 @@ def build_audio_plan(
             "source_manifest_matches": int(getattr(args, "source_manifest_matches", 0) or 0),
             "concrete": bool(args.concrete),
             "bed_noise": bool(args.bed_noise),
+            "baseline_beat": str(baseline_beat_path(args) or ""),
+            "baseline_beat_gain": float(getattr(args, "baseline_beat_gain", -9.0)),
+            "baseline_beat_bars": float(getattr(args, "baseline_beat_bars", 0.0)),
+            "baseline_beat_source_duration_ms": int(getattr(args, "baseline_beat_source_duration_ms", 0) or 0),
+            "baseline_beat_inferred_bpm": float(getattr(args, "baseline_beat_inferred_bpm", 0.0) or 0.0),
             "sample_rate": int(args.sample_rate),
             "master_gain": float(args.master_gain),
             "min_frag_ms": min_frag_ms,
@@ -4236,7 +4355,16 @@ def normalize_master(audio: AudioSegment, master_gain: float) -> AudioSegment:
     return compress_dynamic_range(audio, threshold=-22.0, ratio=2.4, attack=8, release=140).apply_gain(master_gain)
 
 
-def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int, args: argparse.Namespace, summary: RunSummary, live: Optional[LiveControlState] = None, beat_jump: Optional[BeatJumpState] = None) -> None:
+def build_variant(
+    samples: List[SampleFile],
+    output_root: Path,
+    variant_idx: int,
+    args: argparse.Namespace,
+    summary: RunSummary,
+    live: Optional[LiveControlState] = None,
+    beat_jump: Optional[BeatJumpState] = None,
+    baseline_beat: Optional[BaselineBeat] = None,
+) -> None:
     total_ms = max(2000, int(max(1.0, args.duration) * 1000))
     min_frag_ms = max(10, int(max(0.01, args.min_frag) * 1000))
     max_frag_ms = max(min_frag_ms, int(max(args.min_frag, args.max_frag) * 1000))
@@ -4248,15 +4376,21 @@ def build_variant(samples: List[SampleFile], output_root: Path, variant_idx: int
 
     main, cuts, ghosts, events = place_events(samples, total_ms, args, min_frag_ms, max_frag_ms, live=live, beat_jump=beat_jump)
     hiss = make_hiss(total_ms, args.sample_rate) if args.bed_noise else AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate)
+    baseline_bed = render_baseline_beat_bed(baseline_beat, total_ms) if baseline_beat else None
 
     master = AudioSegment.silent(duration=total_ms, frame_rate=args.sample_rate).set_channels(2)
-    master = master.overlay(hiss, position=0).overlay(ghosts - 2, position=0).overlay(cuts + 1, position=0).overlay(main + 2, position=0)
+    master = master.overlay(hiss, position=0)
+    if baseline_bed is not None:
+        master = master.overlay(baseline_bed, position=0)
+    master = master.overlay(ghosts - 2, position=0).overlay(cuts + 1, position=0).overlay(main + 2, position=0)
     master = normalize_master(master, args.master_gain)
 
     main.export(stems_dir / "voice_main.wav", format="wav")
     cuts.export(stems_dir / "voice_cuts.wav", format="wav")
     ghosts.export(stems_dir / "ghosts.wav", format="wav")
     hiss.export(stems_dir / "hiss_bed.wav", format="wav")
+    if baseline_bed is not None:
+        baseline_bed.export(stems_dir / "baseline_beat.wav", format="wav")
     master_path = variant_dir / f"{variant_name}_master.wav"
     event_path = variant_dir / f"{variant_name}_events.csv"
     plan_path = variant_dir / f"{variant_name}_plan.json"
@@ -4288,6 +4422,8 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
         raise SystemExit(f"Input path not found: {input_root}")
     if not input_root.is_dir() and not input_root.is_file():
         raise SystemExit(f"--input must be an audio file or directory: {input_root}")
+
+    baseline_beat = load_baseline_beat(args)
 
     if args.cue_file:
         cue_path = Path(args.cue_file).expanduser().resolve()
@@ -4338,7 +4474,7 @@ def run_audio_mode(args: argparse.Namespace, output_root: Path, summary: RunSumm
     for i in range(1, max(1, args.variants) + 1):
         runtime = runtime_snapshot(args, live)
         local_args = apply_runtime_params(args, runtime)
-        build_variant(samples, audio_out, i, local_args, summary, live=live, beat_jump=beat_jump)
+        build_variant(samples, audio_out, i, local_args, summary, live=live, beat_jump=beat_jump, baseline_beat=baseline_beat)
     summary.beat_similarity_jumps += beat_jump.selections
     summary.beat_similarity_fallbacks += beat_jump.fallbacks
 

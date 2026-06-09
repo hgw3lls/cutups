@@ -122,6 +122,7 @@ class LiveControlTests(unittest.TestCase):
             section_repeat_probability=0.23,
             section_ghost_probability=0.18,
         )
+        baseline_path = str(REPO_ROOT / "baseline.wav")
         args = types.SimpleNamespace(
             seed=9,
             preset="spoken-word-cutup",
@@ -134,6 +135,11 @@ class LiveControlTests(unittest.TestCase):
             source_diversity=0.65,
             concrete=False,
             bed_noise=False,
+            baseline_beat=baseline_path,
+            baseline_beat_gain=-12.0,
+            baseline_beat_bars=2.0,
+            baseline_beat_source_duration_ms=4000,
+            baseline_beat_inferred_bpm=120.0,
             sample_rate=44100,
             master_gain=-3.0,
             bpm=120.0,
@@ -151,6 +157,11 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(plan["config"]["section_arc"], "spoken")
         self.assertEqual(plan["config"]["source_score"], "spoken")
         self.assertEqual(plan["config"]["source_diversity"], 0.65)
+        self.assertEqual(plan["config"]["baseline_beat"], baseline_path)
+        self.assertEqual(plan["config"]["baseline_beat_gain"], -12.0)
+        self.assertEqual(plan["config"]["baseline_beat_bars"], 2.0)
+        self.assertEqual(plan["config"]["baseline_beat_source_duration_ms"], 4000)
+        self.assertEqual(plan["config"]["baseline_beat_inferred_bpm"], 120.0)
         self.assertEqual(plan["config"]["source_manifest"], "")
         self.assertEqual(plan["config"]["source_manifest_matches"], 0)
         self.assertEqual(plan["events"][0]["source_manifest_role"], "spoken")
@@ -166,6 +177,12 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(len(plan["section_windows"]), 5)
         self.assertEqual(len(plan["section_targets"]), 5)
         self.assertEqual(plan["section_targets"][0]["section_arc"], "spoken")
+
+    def test_baseline_beat_bpm_from_duration(self) -> None:
+        self.assertEqual(cutup.baseline_beat_bpm_from_duration(8000, 4), 120.0)
+        self.assertEqual(cutup.baseline_beat_bpm_from_duration(2000, 1), 120.0)
+        self.assertEqual(cutup.baseline_beat_bpm_from_duration(0, 4), 0.0)
+        self.assertEqual(cutup.baseline_beat_bpm_from_duration(8000, 0), 0.0)
 
     def test_write_qa_sources_creates_source_tree_and_refuses_clobber(self) -> None:
         with tempfile.TemporaryDirectory() as td:

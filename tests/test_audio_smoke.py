@@ -97,9 +97,11 @@ class AudioSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = root / "voice_phrase.wav"
+            baseline = root / "baseline_beat.wav"
             manifest = root / "source_manifest.csv"
             output = root / "render"
             _write_tone_wav(source)
+            _write_tone_wav(baseline, duration_s=2.0)
             manifest.write_text(
                 "file,role,tags,intensity,loop_hint,words,weight\n"
                 "voice_phrase.wav,beat,\"drum,loop\",1,3,2,1.4\n",
@@ -116,8 +118,12 @@ class AudioSmokeTests(unittest.TestCase):
                     str(source),
                     "--source-manifest",
                     str(manifest),
-                    "--bpm",
-                    "120",
+                    "--baseline-beat",
+                    str(baseline),
+                    "--baseline-beat-bars",
+                    "1",
+                    "--baseline-beat-gain",
+                    "-12",
                     "--slice-grid",
                     "1/16",
                     "--beat-jump-mode",
@@ -148,6 +154,7 @@ class AudioSmokeTests(unittest.TestCase):
                 ]
             )
             self.assertIn("Audio events placed:", result.stdout)
+            self.assertIn("Baseline beat BPM inferred:", result.stdout)
             self.assertIn("Source manifest applied:", result.stdout)
             self.assertIn("matched=1/1", result.stdout)
             self.assertIn("Analysis cache written:", result.stdout)
@@ -157,17 +164,20 @@ class AudioSmokeTests(unittest.TestCase):
             variant = output / "audio_cutups" / "cutup_01"
             master = variant / "cutup_01_master.wav"
             preview = variant / "cutup_01_preview.wav"
+            baseline_stem = variant / "stems" / "baseline_beat.wav"
             events = variant / "cutup_01_events.csv"
             plan = variant / "cutup_01_plan.json"
             score = variant / "cutup_01_score.txt"
             analysis_cache = output / "audio_analysis_cache.json"
-            for path in (master, preview, events, plan, score, analysis_cache):
+            for path in (master, preview, baseline_stem, events, plan, score, analysis_cache):
                 self.assertTrue(path.exists(), path)
 
             self.assertEqual(_wav_info(master)[:2], (2, 44100))
             self.assertAlmostEqual(_wav_info(master)[2], 3.0, places=2)
             self.assertEqual(_wav_info(preview)[:2], (2, 44100))
             self.assertAlmostEqual(_wav_info(preview)[2], 1.0, places=2)
+            self.assertEqual(_wav_info(baseline_stem)[:2], (2, 44100))
+            self.assertAlmostEqual(_wav_info(baseline_stem)[2], 3.0, places=2)
 
             rows = list(csv.DictReader(events.open(newline="", encoding="utf-8")))
             self.assertGreaterEqual(len(rows), 1)
@@ -187,6 +197,12 @@ class AudioSmokeTests(unittest.TestCase):
             self.assertEqual(render_plan["seed"], 101)
             self.assertEqual(render_plan["preset"], "beat-cutup")
             self.assertEqual(render_plan["duration_ms"], 3000)
+            self.assertEqual(render_plan["config"]["baseline_beat"], str(baseline.resolve()))
+            self.assertEqual(render_plan["config"]["baseline_beat_gain"], -12.0)
+            self.assertEqual(render_plan["config"]["baseline_beat_bars"], 1.0)
+            self.assertEqual(render_plan["config"]["baseline_beat_source_duration_ms"], 2000)
+            self.assertEqual(render_plan["config"]["baseline_beat_inferred_bpm"], 120.0)
+            self.assertEqual(render_plan["config"]["bpm"], 120.0)
             self.assertEqual(render_plan["config"]["beat_grid_ms"], 125)
             self.assertEqual(render_plan["config"]["section_arc"], "pulse")
             self.assertEqual(render_plan["config"]["source_score"], "beat")

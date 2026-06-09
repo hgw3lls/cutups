@@ -131,6 +131,14 @@ Beat-oriented cutups can use manual grid slicing:
 python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --stutter-rate 0.55 --repeat-rate 0.45 --mute-rate 0.2 --beat-dropout-rate 0.15 --output out/beat_demo
 ```
 
+Use a dedicated beat loop as a timing bed when the cutup source material should ride on a baseline groove instead of becoming the groove:
+
+```bash
+python3 PY/cutup.py --mode audio --preset beat-cutup --input ./voice_or_noise --baseline-beat ./beats/drum_loop.wav --baseline-beat-bars 4 --baseline-beat-gain -10 --slice-grid 1/16 --stutter-rate 0.45 --repeat-rate 0.3 --output out/beat_baseline
+```
+
+`--baseline-beat` is looped under the master and exported as `stems/baseline_beat.wav`; it is not added to the random source pool. If `--baseline-beat-bars` is set and `--bpm` is omitted, cutups infers the grid BPM from the beat-loop duration assuming 4/4 bars. Set `--bpm` manually when the loop has pickup silence, odd meter, or a non-looping arrangement.
+
 Write a lightweight JSON source analysis cache for later inspection or future beat-similarity work:
 
 ```bash
