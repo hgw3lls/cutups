@@ -659,6 +659,21 @@ class ControlGUI:
     def send_sc_native_source_blend(self) -> None:
         self.send_sc("/cutups/scLive/source", "blend")
 
+    def send_sc_preset_balanced(self) -> None:
+        self.send_sc("/cutups/scLive/preset", "balanced")
+
+    def send_sc_preset_breach(self) -> None:
+        self.send_sc("/cutups/scLive/preset", "signal-breach")
+
+    def send_sc_preset_ghost(self) -> None:
+        self.send_sc("/cutups/scLive/preset", "ghost-transmission")
+
+    def send_sc_preset_beat(self) -> None:
+        self.send_sc("/cutups/scLive/preset", "beat-stutter")
+
+    def send_sc_preset_spoken(self) -> None:
+        self.send_sc("/cutups/scLive/preset", "spoken-word")
+
     def send_sc_bed_start(self) -> None:
         self.send_sc("/cutups/scLive/bed/start")
 
@@ -1029,20 +1044,29 @@ def main() -> None:
 
     sc_row_e = ttk.Frame(sc_frame)
     sc_row_e.grid(row=5, column=0, columnspan=6, sticky="w", pady=(6, 0))
-    ttk.Label(sc_row_e, text="Bed slots").pack(side=tk.LEFT)
-    ttk.Button(sc_row_e, text="A", command=gui.send_sc_bed_slot_a, width=4).pack(side=tk.LEFT, padx=(8, 0))
-    ttk.Button(sc_row_e, text="B", command=gui.send_sc_bed_slot_b, width=4).pack(side=tk.LEFT, padx=(6, 0))
-    ttk.Button(sc_row_e, text="C", command=gui.send_sc_bed_slot_c, width=4).pack(side=tk.LEFT, padx=(6, 0))
-    ttk.Button(sc_row_e, text="Clear", command=gui.send_sc_bed_slots_clear).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Label(sc_row_e, text="SC preset").pack(side=tk.LEFT)
+    ttk.Button(sc_row_e, text="Balanced", command=gui.send_sc_preset_balanced).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(sc_row_e, text="Breach", command=gui.send_sc_preset_breach).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_e, text="Ghost", command=gui.send_sc_preset_ghost).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_e, text="Beat", command=gui.send_sc_preset_beat).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_e, text="Spoken", command=gui.send_sc_preset_spoken).pack(side=tk.LEFT, padx=(6, 0))
 
     sc_row_f = ttk.Frame(sc_frame)
     sc_row_f.grid(row=6, column=0, columnspan=6, sticky="w", pady=(6, 0))
-    ttk.Label(sc_row_f, text="Feedback").pack(side=tk.LEFT)
-    ttk.Button(sc_row_f, text="Overdub off", command=gui.send_sc_overdub_off).pack(side=tk.LEFT, padx=(8, 0))
-    ttk.Button(sc_row_f, text="Low", command=gui.send_sc_overdub_low, width=5).pack(side=tk.LEFT, padx=(6, 0))
-    ttk.Button(sc_row_f, text="High", command=gui.send_sc_overdub_high, width=5).pack(side=tk.LEFT, padx=(6, 0))
-    ttk.Button(sc_row_f, text="Decay tight", command=gui.send_sc_decay_tight).pack(side=tk.LEFT, padx=(12, 0))
-    ttk.Button(sc_row_f, text="Decay smear", command=gui.send_sc_decay_smear).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Label(sc_row_f, text="Bed slots").pack(side=tk.LEFT)
+    ttk.Button(sc_row_f, text="A", command=gui.send_sc_bed_slot_a, width=4).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(sc_row_f, text="B", command=gui.send_sc_bed_slot_b, width=4).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_f, text="C", command=gui.send_sc_bed_slot_c, width=4).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_f, text="Clear", command=gui.send_sc_bed_slots_clear).pack(side=tk.LEFT, padx=(6, 0))
+
+    sc_row_g = ttk.Frame(sc_frame)
+    sc_row_g.grid(row=7, column=0, columnspan=6, sticky="w", pady=(6, 0))
+    ttk.Label(sc_row_g, text="Feedback").pack(side=tk.LEFT)
+    ttk.Button(sc_row_g, text="Overdub off", command=gui.send_sc_overdub_off).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(sc_row_g, text="Low", command=gui.send_sc_overdub_low, width=5).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_g, text="High", command=gui.send_sc_overdub_high, width=5).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_g, text="Decay tight", command=gui.send_sc_decay_tight).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_g, text="Decay smear", command=gui.send_sc_decay_smear).pack(side=tk.LEFT, padx=(6, 0))
 
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(2, 10))

@@ -104,6 +104,8 @@ s.waitForBoot({
 	~bedSlots = IdentityDictionary.new;
 	~bedSlotBtns = IdentityDictionary.new;
 
+	~scPerformancePresetNames = ["balanced", "signal-breach", "ghost-transmission", "beat-stutter", "spoken-word"];
+	~scPerformancePreset = "balanced";
 	~density = \medium;
 
 	~masterAmp = 0.95;
@@ -147,7 +149,36 @@ s.waitForBoot({
 	~liveCutBtn = nil;
 	~bedBtn = nil;
 	~bedReverseBtn = nil;
+	~densityMenu = nil;
+	~scPerformancePresetMenu = nil;
 	~scCutSourceMenu = nil;
+	~cloudVoicesBox = nil;
+	~loopVoicesBox = nil;
+	~ghostVoicesBox = nil;
+	~masterSlider = nil;
+	~driveSlider = nil;
+	~wowSlider = nil;
+	~flutterSlider = nil;
+	~dropoutSlider = nil;
+	~dirtSlider = nil;
+	~ageSlider = nil;
+	~dubSlider = nil;
+	~lpSlider = nil;
+	~hpSlider = nil;
+	~cutsSlider = nil;
+	~loopsSlider = nil;
+	~ghostsSlider = nil;
+	~cloudSlider = nil;
+	~liveAmpSlider = nil;
+	~liveInputMonitorSlider = nil;
+	~liveOverdubSendSlider = nil;
+	~liveDecaySlider = nil;
+	~liveCutAmpSlider = nil;
+	~bedAmpSlider = nil;
+	~bedWaitMinBox = nil;
+	~bedWaitMaxBox = nil;
+	~bedDurMinBox = nil;
+	~bedDurMaxBox = nil;
 
 	// ============================================================
 	// UI HELPERS
@@ -1177,6 +1208,60 @@ s.waitForBoot({
 		};
 	};
 
+	~refreshPerformanceControls = {
+		var densityIdx, presetIdx, sourceIdx;
+
+		densityIdx = [\sparse, \medium, \dense].indexOf(~density);
+		if(densityIdx.isNil) { densityIdx = 1 };
+		presetIdx = ~scPerformancePresetNames.indexOf(~scPerformancePreset);
+		if(presetIdx.isNil) { presetIdx = 0 };
+		sourceIdx = [\material, \live, \blend].indexOf(~scCutSourceMode);
+		if(sourceIdx.isNil) { sourceIdx = 0 };
+
+		~updateMasterFX.();
+		~updateLiveTrackAmp.();
+		~updateLiveInputMonitor.();
+		~bedSlots.valuesDo { |synth|
+			if(synth.notNil) {
+				try { synth.set(\amp, ~bedAmp, \dropout, ~bedDropout, \reverse, ~bedReverse.binaryValue) };
+			};
+		};
+
+		{
+			if(~densityMenu.notNil) { ~densityMenu.value = densityIdx };
+			if(~scPerformancePresetMenu.notNil) { ~scPerformancePresetMenu.value = presetIdx };
+			if(~scCutSourceMenu.notNil) { ~scCutSourceMenu.value = sourceIdx };
+			if(~bedReverseBtn.notNil) { ~bedReverseBtn.value = ~bedReverse.binaryValue };
+			if(~cloudVoicesBox.notNil) { ~cloudVoicesBox.value = ~cloudVoices };
+			if(~loopVoicesBox.notNil) { ~loopVoicesBox.value = ~loopVoices };
+			if(~ghostVoicesBox.notNil) { ~ghostVoicesBox.value = ~ghostVoices };
+			if(~masterSlider.notNil) { ~masterSlider.value = ~masterAmp.linlin(0, 2, 0, 1).clip(0, 1) };
+			if(~driveSlider.notNil) { ~driveSlider.value = ~driveAmt.linlin(1.0, 3.0, 0, 1).clip(0, 1) };
+			if(~wowSlider.notNil) { ~wowSlider.value = ~wowAmt.linlin(0, 0.08, 0, 1).clip(0, 1) };
+			if(~flutterSlider.notNil) { ~flutterSlider.value = ~flutterAmt.linlin(0, 0.04, 0, 1).clip(0, 1) };
+			if(~dropoutSlider.notNil) { ~dropoutSlider.value = ~dropoutAmt.linlin(0, 0.4, 0, 1).clip(0, 1) };
+			if(~dirtSlider.notNil) { ~dirtSlider.value = ~dirtAmt.linlin(0, 0.5, 0, 1).clip(0, 1) };
+			if(~ageSlider.notNil) { ~ageSlider.value = ~ageAmt.clip(0, 1) };
+			if(~dubSlider.notNil) { ~dubSlider.value = ~dubAmt.linlin(0, 0.8, 0, 1).clip(0, 1) };
+			if(~lpSlider.notNil) { ~lpSlider.value = ~lpFreq.linlin(1500, 14000, 0, 1).clip(0, 1) };
+			if(~hpSlider.notNil) { ~hpSlider.value = ~hpFreq.linlin(20, 1500, 0, 1).clip(0, 1) };
+			if(~cutsSlider.notNil) { ~cutsSlider.value = ~cutsAmp.clip(0, 1) };
+			if(~loopsSlider.notNil) { ~loopsSlider.value = ~loopsAmp.clip(0, 1) };
+			if(~ghostsSlider.notNil) { ~ghostsSlider.value = ~ghostsAmp.clip(0, 1) };
+			if(~cloudSlider.notNil) { ~cloudSlider.value = ~cloudAmp.clip(0, 1) };
+			if(~liveAmpSlider.notNil) { ~liveAmpSlider.value = (~liveTrackAmp / 1.5).clip(0, 1) };
+			if(~liveInputMonitorSlider.notNil) { ~liveInputMonitorSlider.value = (~liveInputMonitor / 1.5).clip(0, 1) };
+			if(~liveOverdubSendSlider.notNil) { ~liveOverdubSendSlider.value = (~liveOverdubSend / 1.5).clip(0, 1) };
+			if(~liveDecaySlider.notNil) { ~liveDecaySlider.value = (~liveInputPreLevel / 0.995).clip(0, 1) };
+			if(~liveCutAmpSlider.notNil) { ~liveCutAmpSlider.value = (~liveCutAmp / 1.5).clip(0, 1) };
+			if(~bedAmpSlider.notNil) { ~bedAmpSlider.value = (~bedAmp / 1.5).clip(0, 1) };
+			if(~bedWaitMinBox.notNil) { ~bedWaitMinBox.value = ~bedMinWait };
+			if(~bedWaitMaxBox.notNil) { ~bedWaitMaxBox.value = ~bedMaxWait };
+			if(~bedDurMinBox.notNil) { ~bedDurMinBox.value = ~bedMinDur };
+			if(~bedDurMaxBox.notNil) { ~bedDurMaxBox.value = ~bedMaxDur };
+		}.defer;
+	};
+
 	~ensureLiveInputBuffer = {
 		var frames;
 
@@ -1246,6 +1331,202 @@ s.waitForBoot({
 			};
 		}.defer;
 		~setStatus.("SC cut source: " ++ ~scCutSourceMode.asString);
+	};
+
+	~applyScPerformancePreset = { |name="balanced"|
+		var raw, preset;
+
+		raw = name.asString.toLower;
+		preset = switch(
+			raw,
+			"signal-breach", { "signal-breach" },
+			"breach", { "signal-breach" },
+			"radio-intrusion", { "signal-breach" },
+			"ghost-transmission", { "ghost-transmission" },
+			"ghost", { "ghost-transmission" },
+			"beat-stutter", { "beat-stutter" },
+			"beat", { "beat-stutter" },
+			"beat-cutup", { "beat-stutter" },
+			"hard-stutter", { "beat-stutter" },
+			"spoken-word", { "spoken-word" },
+			"spoken", { "spoken-word" },
+			"spoken-word-cutup", { "spoken-word" },
+			{ "balanced" }
+		);
+
+		~scPerformancePreset = preset;
+
+		switch(
+			preset,
+			"signal-breach", {
+				~density = \dense;
+				~setScCutSource.(\blend);
+				~liveTrackAmp = 0.55;
+				~liveInputMonitor = 0.0;
+				~liveOverdubSend = 0.32;
+				~liveInputPreLevel = 0.72;
+				~liveCutAmp = 0.95;
+				~bedAmp = 0.24;
+				~bedMinWait = 2.5;
+				~bedMaxWait = 7.0;
+				~bedMinDur = 4.0;
+				~bedMaxDur = 12.0;
+				~bedDropout = 0.14;
+				~bedReverse = false;
+				~masterAmp = 0.95;
+				~driveAmt = 2.15;
+				~wowAmt = 0.035;
+				~flutterAmt = 0.022;
+				~dropoutAmt = 0.16;
+				~dirtAmt = 0.23;
+				~ageAmt = 0.55;
+				~dubAmt = 0.18;
+				~lpFreq = 7200;
+				~hpFreq = 90;
+				~cutsAmp = 0.9;
+				~loopsAmp = 0.55;
+				~ghostsAmp = 0.42;
+				~cloudAmp = 0.62;
+				~cloudVoices = 6;
+				~loopVoices = 3;
+				~ghostVoices = 2;
+			},
+			"ghost-transmission", {
+				~density = \sparse;
+				~setScCutSource.(\blend);
+				~liveTrackAmp = 0.50;
+				~liveInputMonitor = 0.0;
+				~liveOverdubSend = 0.20;
+				~liveInputPreLevel = 0.93;
+				~liveCutAmp = 0.38;
+				~bedAmp = 0.42;
+				~bedMinWait = 9.0;
+				~bedMaxWait = 22.0;
+				~bedMinDur = 16.0;
+				~bedMaxDur = 40.0;
+				~bedDropout = 0.05;
+				~bedReverse = true;
+				~masterAmp = 0.90;
+				~driveAmt = 1.35;
+				~wowAmt = 0.028;
+				~flutterAmt = 0.010;
+				~dropoutAmt = 0.05;
+				~dirtAmt = 0.12;
+				~ageAmt = 0.72;
+				~dubAmt = 0.38;
+				~lpFreq = 6500;
+				~hpFreq = 45;
+				~cutsAmp = 0.35;
+				~loopsAmp = 0.45;
+				~ghostsAmp = 0.85;
+				~cloudAmp = 0.55;
+				~cloudVoices = 5;
+				~loopVoices = 2;
+				~ghostVoices = 5;
+			},
+			"beat-stutter", {
+				~density = \dense;
+				~setScCutSource.(\material);
+				~liveTrackAmp = 0.60;
+				~liveInputMonitor = 0.0;
+				~liveOverdubSend = 0.08;
+				~liveInputPreLevel = 0.78;
+				~liveCutAmp = 0.82;
+				~bedAmp = 0.18;
+				~bedMinWait = 2.0;
+				~bedMaxWait = 5.0;
+				~bedMinDur = 2.5;
+				~bedMaxDur = 7.0;
+				~bedDropout = 0.05;
+				~bedReverse = false;
+				~masterAmp = 0.95;
+				~driveAmt = 1.55;
+				~wowAmt = 0.012;
+				~flutterAmt = 0.006;
+				~dropoutAmt = 0.045;
+				~dirtAmt = 0.07;
+				~ageAmt = 0.18;
+				~dubAmt = 0.05;
+				~lpFreq = 12000;
+				~hpFreq = 35;
+				~cutsAmp = 0.85;
+				~loopsAmp = 0.75;
+				~ghostsAmp = 0.22;
+				~cloudAmp = 0.25;
+				~cloudVoices = 2;
+				~loopVoices = 5;
+				~ghostVoices = 1;
+			},
+			"spoken-word", {
+				~density = \medium;
+				~setScCutSource.(\blend);
+				~liveTrackAmp = 0.68;
+				~liveInputMonitor = 0.0;
+				~liveOverdubSend = 0.10;
+				~liveInputPreLevel = 0.88;
+				~liveCutAmp = 0.45;
+				~bedAmp = 0.20;
+				~bedMinWait = 6.0;
+				~bedMaxWait = 14.0;
+				~bedMinDur = 8.0;
+				~bedMaxDur = 20.0;
+				~bedDropout = 0.025;
+				~bedReverse = false;
+				~masterAmp = 0.95;
+				~driveAmt = 1.20;
+				~wowAmt = 0.012;
+				~flutterAmt = 0.004;
+				~dropoutAmt = 0.025;
+				~dirtAmt = 0.04;
+				~ageAmt = 0.20;
+				~dubAmt = 0.06;
+				~lpFreq = 11000;
+				~hpFreq = 50;
+				~cutsAmp = 0.55;
+				~loopsAmp = 0.25;
+				~ghostsAmp = 0.30;
+				~cloudAmp = 0.20;
+				~cloudVoices = 2;
+				~loopVoices = 2;
+				~ghostVoices = 2;
+			},
+			{
+				~density = \medium;
+				~setScCutSource.(\material);
+				~liveTrackAmp = 0.65;
+				~liveInputMonitor = 0.0;
+				~liveOverdubSend = 0.0;
+				~liveInputPreLevel = 0.86;
+				~liveCutAmp = 0.55;
+				~bedAmp = 0.32;
+				~bedMinWait = 8.0;
+				~bedMaxWait = 20.0;
+				~bedMinDur = 12.0;
+				~bedMaxDur = 32.0;
+				~bedDropout = 0.035;
+				~bedReverse = false;
+				~masterAmp = 0.95;
+				~driveAmt = 1.20;
+				~wowAmt = 0.01;
+				~flutterAmt = 0.006;
+				~dropoutAmt = 0.03;
+				~dirtAmt = 0.05;
+				~ageAmt = 0.18;
+				~dubAmt = 0.08;
+				~lpFreq = 11000;
+				~hpFreq = 45;
+				~cutsAmp = 0.8;
+				~loopsAmp = 0.75;
+				~ghostsAmp = 0.55;
+				~cloudAmp = 0.5;
+				~cloudVoices = 4;
+				~loopVoices = 4;
+				~ghostVoices = 3;
+			}
+		);
+
+		~refreshPerformanceControls.();
+		~setStatus.("SC preset: " ++ preset);
 	};
 
 	~chooseScCutSource = {
@@ -2113,6 +2394,11 @@ s.waitForBoot({
 				~setScCutSource.(msg[1].asString);
 			};
 		}, "/cutups/scLive/source");
+		OSCdef(\cutupsTapedeckScLivePreset, { |msg|
+			if(msg.size > 1) {
+				~applyScPerformancePreset.(msg[1].asString);
+			};
+		}, "/cutups/scLive/preset");
 		OSCdef(\cutupsTapedeckScLiveBedStart, {
 			~startBedLoops.();
 		}, "/cutups/scLive/bed/start");
@@ -2161,7 +2447,7 @@ s.waitForBoot({
 				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
 			};
 		}, "/cutups/master/age");
-		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/overdub /cutups/scLive/decay /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/overdub /cutups/scLive/decay /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/preset /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
 	};
 
 	~installOSC.();
@@ -2178,7 +2464,7 @@ s.waitForBoot({
 		var cutsMuteBtn, loopsMuteBtn, ghostsMuteBtn, cloudMuteBtn;
 		var liveAmpSlider, liveInputMonitorSlider, liveOverdubSendSlider, liveDecaySlider, liveCutAmpSlider, bedAmpSlider;
 		var bedWaitMinBox, bedWaitMaxBox, bedDurMinBox, bedDurMaxBox;
-		var scCutSourceMenu;
+		var scPresetMenu, scCutSourceMenu;
 
 		win = Window("TRANSMISSIONS TAPE-DECK — DIRECT LOAD", Rect(60, 60, 1140, 1000)).front;
 		win.alwaysOnTop = true;
@@ -2461,6 +2747,15 @@ s.waitForBoot({
 				};
 			});
 
+		StaticText(win, Rect(900, 145, 58, 18)).string = "SC PRE";
+		scPresetMenu = PopUpMenu(win, Rect(960, 142, 110, 24));
+		~scPerformancePresetMenu = scPresetMenu;
+		scPresetMenu.items = ~scPerformancePresetNames;
+		scPresetMenu.value = 0;
+		scPresetMenu.action = {
+			~applyScPerformancePreset.(~scPerformancePresetNames[scPresetMenu.value]);
+		};
+
 		StaticText(win, Rect(900, 175, 180, 18)).string = "TRANSPORT / LIVE";
 
 		~sceneBtn = Button(win, Rect(900, 210, 170, 36))
@@ -2669,6 +2964,36 @@ s.waitForBoot({
 
 		StaticText(win, Rect(20, 942, 1080, 20)).string =
 			"SC SRC drives SC CUTS and BED LOOP; ODUB feeds SC cuts/bed back into the live buffer, DECAY controls buffer smear.";
+
+		~densityMenu = densityMenu;
+		~cloudVoicesBox = cloudVoicesBox;
+		~loopVoicesBox = loopVoicesBox;
+		~ghostVoicesBox = ghostVoicesBox;
+		~masterSlider = masterSlider;
+		~driveSlider = driveSlider;
+		~wowSlider = wowSlider;
+		~flutterSlider = flutterSlider;
+		~dropoutSlider = dropoutSlider;
+		~dirtSlider = dirtSlider;
+		~ageSlider = ageSlider;
+		~dubSlider = dubSlider;
+		~lpSlider = lpSlider;
+		~hpSlider = hpSlider;
+		~cutsSlider = cutsSlider;
+		~loopsSlider = loopsSlider;
+		~ghostsSlider = ghostsSlider;
+		~cloudSlider = cloudSlider;
+		~liveAmpSlider = liveAmpSlider;
+		~liveInputMonitorSlider = liveInputMonitorSlider;
+		~liveOverdubSendSlider = liveOverdubSendSlider;
+		~liveDecaySlider = liveDecaySlider;
+		~liveCutAmpSlider = liveCutAmpSlider;
+		~bedAmpSlider = bedAmpSlider;
+		~bedWaitMinBox = bedWaitMinBox;
+		~bedWaitMaxBox = bedWaitMaxBox;
+		~bedDurMinBox = bedDurMinBox;
+		~bedDurMaxBox = bedDurMaxBox;
+		~refreshPerformanceControls.();
 
 		win.onClose = {
 			~stopLoader.();
