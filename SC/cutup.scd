@@ -14,7 +14,7 @@ FIXES
 USAGE
 1. Boot server
 2. Run the whole block
-3. Point TAPE ROOT to a WAV folder, an audio_cutups/cutup_XX folder, or a cutup_XX_live_track.wav file
+3. Point SOURCE to a WAV folder, an audio_cutups/cutup_XX folder, or a cutup_XX_live_track.wav file
 4. Press LOAD DIR, LOAD LIVE, or LOAD CHUNKS
 5. Watch post window for:
    - SCAN PATTERN
@@ -67,6 +67,7 @@ s.waitForBoot({
 	~flutterAmt = 0.006;
 	~dropoutAmt = 0.03;
 	~dirtAmt = 0.05;
+	~ageAmt = 0.18;
 	~dubAmt = 0.08;
 	~lpFreq = 11000;
 	~hpFreq = 45;
@@ -579,6 +580,29 @@ s.waitForBoot({
 		Out.ar(out, sig);
 	}).add;
 
+	SynthDef(\concreteCutTape, {
+		|out=0, buf=0, amp=0.28, rate=1.0, start=0.0, dur=0.5, pan=0.0, fx=0.55, lp=9000, hp=90|
+		var frames, pos, env, raw, sweep, comb, dly, ring, pitch, phase, clip, shaped, sig;
+
+		frames = BufFrames.kr(buf);
+		pos = start * frames;
+		env = EnvGen.kr(Env.linen(0.004, dur.max(0.02), 0.03, 1, -4), doneAction: 2);
+		raw = PlayBuf.ar(1, buf, BufRateScale.kr(buf) * rate, startPos: pos, doneAction: 0);
+		sweep = XLine.kr(lp.max(400), hp.max(80), dur.max(0.03)).clip(120, 12000);
+		raw = RLPF.ar(HPF.ar(raw, hp), sweep, 0.28);
+		comb = CombC.ar(raw, 0.45, LFNoise1.kr(0.6).range(0.035, 0.22), 1.8);
+		dly = DelayC.ar(raw, 0.35, LFNoise1.kr(0.4).range(0.04, 0.18));
+		ring = raw * SinOsc.ar(LFNoise1.kr(0.25).range(90, 900));
+		pitch = PitchShift.ar(raw + WhiteNoise.ar(0.01), 0.08, LFNoise1.kr(0.08).range(0.78, 1.24), 0.01, 0.04);
+		phase = RLPF.ar(raw, SinOsc.kr(0.12).range(320, 2400), 0.18);
+		clip = Clip.ar(raw * LFNoise1.kr(0.5).range(1.4, 4.0), -0.6, 0.6);
+		shaped = (raw * 0.30) + (comb * 0.16) + (dly * 0.12) + (ring * 0.11) + (pitch * 0.13) + (phase * 0.10) + (clip * 0.18);
+		sig = XFade2.ar(raw, shaped, (fx.clip(0, 1) * 2) - 1);
+		sig = Pan2.ar(sig * env * amp, pan);
+		sig = FreeVerb2.ar(sig[0], sig[1], mix: 0.18, room: 0.75, damp: 0.38);
+		Out.ar(out, sig);
+	}).add;
+
 	SynthDef(\loopCellTape, {
 		|out=0, buf=0, amp=0.22, rate=1.0, start=0.0, end=0.2, pan=0.0, atk=0.01, rel=0.2, lp=8500, hp=120, trigRate=4|
 		var frames, startPos, endPos, trig, phase, sig, env;
@@ -626,8 +650,8 @@ s.waitForBoot({
 	}).add;
 
 	SynthDef(\tapeDeckMaster, {
-		|in=0, out=0, amp=1.0, drive=1.2, wow=0.01, flutter=0.006, dropout=0.03, dirt=0.05, dub=0.08, lp=11000, hp=45|
-		var dry, sig, wowMod, flutterMod, hiss, crackle, gate, delA, delB;
+		|in=0, out=0, amp=1.0, drive=1.2, wow=0.01, flutter=0.006, dropout=0.03, dirt=0.05, age=0.18, dub=0.08, lp=11000, hp=45|
+		var dry, sig, wowMod, flutterMod, hiss, crackle, rumble, hum, gate, delA, delB;
 
 		dry = In.ar(in, 2);
 		wowMod = SinOsc.kr(0.18, 0, wow, 1.0);
@@ -637,6 +661,8 @@ s.waitForBoot({
 
 		hiss = HPF.ar(WhiteNoise.ar(dirt * 0.05), 5000);
 		crackle = Decay2.ar(Dust.ar((dirt * 100).max(1)), 0.0008, 0.01) * WhiteNoise.ar(dirt * 0.12);
+		rumble = LPF.ar(BrownNoise.ar((dirt + age) * 0.025), 95);
+		hum = SinOsc.ar([60, 120], 0, dirt * age * 0.025);
 
 		delA = DelayC.ar(sig, 0.3, 0.11);
 		delB = DelayC.ar(sig, 0.4, 0.22);
@@ -644,10 +670,11 @@ s.waitForBoot({
 		gate = Lag.kr((LFNoise1.kr(4.5) > (-1 + (dropout * 2))).max(0), 0.02);
 
 		sig = sig + (delA * dub) + (delB * (dub * 0.7));
-		sig = sig + hiss + Pan2.ar(crackle, LFNoise1.kr(1.2));
+		sig = sig + hiss + rumble + hum + Pan2.ar(crackle, LFNoise1.kr(1.2));
 		sig = sig * gate;
 		sig = HPF.ar(sig, hp);
-		sig = LPF.ar(sig, lp);
+		sig = LPF.ar(sig, (lp * (1 - (age * 0.35))).clip(600, 18000));
+		sig = BPeakEQ.ar(sig, (850 + (age * 1900)).clip(200, 4000), 0.7, age * -4);
 		sig = LeakDC.ar(sig);
 		sig = CompanderD.ar(sig, 0.6, 1, 0.7, 0.01, 0.14);
 
@@ -673,6 +700,7 @@ s.waitForBoot({
 			\flutter, ~flutterAmt,
 			\dropout, ~dropoutAmt,
 			\dirt, ~dirtAmt,
+			\age, ~ageAmt,
 			\dub, ~dubAmt,
 			\lp, ~lpFreq,
 			\hp, ~hpFreq
@@ -688,6 +716,7 @@ s.waitForBoot({
 				\flutter, ~flutterAmt,
 				\dropout, ~dropoutAmt,
 				\dirt, ~dirtAmt,
+				\age, ~ageAmt,
 				\dub, ~dubAmt,
 				\lp, ~lpFreq,
 				\hp, ~hpFreq
@@ -1000,6 +1029,37 @@ s.waitForBoot({
 		~setStatus.("Phrase fired");
 	};
 
+	~concreteShot = {
+		var idx, meta, dur, fragDur, start;
+
+		if(~canStartPlayback.().not) {
+			^nil;
+		};
+
+		idx = ~weightedChooseIndex.(0.95);
+		if(idx.isNil) { ^nil };
+
+		meta = ~sampleMeta[idx];
+		dur = meta[\dur].max(0.05);
+		fragDur = exprand(0.08, min(1.8, dur.max(0.1)));
+		start = rrand(0.0, max(0.0, dur - fragDur));
+
+		Synth.head(~cutsGroup, \concreteCutTape, [
+			\out, ~mixBus,
+			\buf, ~buffers[idx].bufnum,
+			\amp, exprand(0.12, 0.42) * ~cutsAmp,
+			\rate, [0.5, 0.75, 1.0, 1.15, 1.4, -0.5, -0.8, -1.0].choose,
+			\start, start / dur,
+			\dur, fragDur,
+			\pan, rrand(-0.95, 0.95),
+			\fx, rrand(0.35, 0.95),
+			\hp, [90, 180, 360, 720].choose,
+			\lp, [1800, 3200, 5600, 9000, 12000].choose
+		]);
+
+		~setStatus.("Concrete cut fired");
+	};
+
 	~recordStart = {
 		s.prepareForRecord(~recordPath);
 		s.record;
@@ -1011,6 +1071,48 @@ s.waitForBoot({
 		~setStatus.("Recording stopped");
 	};
 
+	~installOSC = {
+		OSCdef(\cutupsTapedeckStab, { ~stab.(); }, "/cutups/stab");
+		OSCdef(\cutupsTapedeckPhrase, { ~phraseShot.(); }, "/cutups/phrase");
+		OSCdef(\cutupsTapedeckConcrete, { ~concreteShot.(); }, "/cutups/concrete");
+		OSCdef(\cutupsTapedeckStop, {
+			~stopLoader.();
+			~stopAll.();
+			~resetButtons.();
+		}, "/cutups/stop");
+		OSCdef(\cutupsTapedeckScene, { |msg|
+			var on;
+			on = if(msg.size > 1) { msg[1].asInteger > 0 } { true };
+			if(on) {
+				~startScene.();
+				{ if(~sceneBtn.notNil) { ~sceneBtn.value = 1 } }.defer;
+			} {
+				~stopSceneOnly.();
+				{ if(~sceneBtn.notNil) { ~sceneBtn.value = 0 } }.defer;
+			};
+		}, "/cutups/scene");
+		OSCdef(\cutupsTapedeckLoadLive, { |msg|
+			if(msg.size > 1) { ~sampleRoot = msg[1].asString };
+			~loadMode = \live;
+			~loadSamplesAsync.();
+		}, "/cutups/loadLive");
+		OSCdef(\cutupsTapedeckLoadChunks, { |msg|
+			if(msg.size > 1) { ~sampleRoot = msg[1].asString };
+			~loadMode = \chunks;
+			~loadSamplesAsync.();
+		}, "/cutups/loadChunks");
+		OSCdef(\cutupsTapedeckMasterAge, { |msg|
+			if(msg.size > 1) {
+				~ageAmt = msg[1].asFloat.clip(0, 1);
+				~updateMasterFX.();
+				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
+			};
+		}, "/cutups/master/age");
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/master/age".postln;
+	};
+
+	~installOSC.();
+
 	// ============================================================
 	// UI
 	// ============================================================
@@ -1018,7 +1120,7 @@ s.waitForBoot({
 	makeUI = {
 		var win, pathField, densityMenu;
 		var cloudVoicesBox, loopVoicesBox, ghostVoicesBox;
-		var masterSlider, driveSlider, wowSlider, flutterSlider, dropoutSlider, dirtSlider, dubSlider, lpSlider, hpSlider;
+		var masterSlider, driveSlider, wowSlider, flutterSlider, dropoutSlider, dirtSlider, ageSlider, dubSlider, lpSlider, hpSlider;
 		var cutsSlider, loopsSlider, ghostsSlider, cloudSlider;
 		var cutsMuteBtn, loopsMuteBtn, ghostsMuteBtn, cloudMuteBtn;
 
@@ -1113,13 +1215,17 @@ s.waitForBoot({
 			.states_([["REC OUT"]])
 			.action_({ ~recordStop.() });
 
-		Button(win, Rect(980, 104, 55, 28))
+		Button(win, Rect(980, 104, 50, 28))
 			.states_([["STAB"]])
 			.action_({ ~stab.() });
 
-		Button(win, Rect(1045, 104, 55, 28))
+		Button(win, Rect(1038, 104, 50, 28))
 			.states_([["PHRS"]])
 			.action_({ ~phraseShot.() });
+
+		Button(win, Rect(1096, 104, 44, 28))
+			.states_([["CNCR"]])
+			.action_({ ~concreteShot.() });
 
 		StaticText(win, Rect(20, 150, 180, 20)).string = "MASTER TAPE STRIP";
 
@@ -1177,8 +1283,17 @@ s.waitForBoot({
 			~updateMasterFX.();
 		};
 
-		StaticText(win, Rect(350, 175, 60, 18)).string = "DUB";
-		dubSlider = Slider(win, Rect(355, 200, 28, 210));
+		StaticText(win, Rect(350, 175, 60, 18)).string = "AGE";
+		ageSlider = Slider(win, Rect(355, 200, 28, 210));
+		ageSlider.orientation = \vertical;
+		ageSlider.value = ~ageAmt.clip(0, 1);
+		ageSlider.action = {
+			~ageAmt = ageSlider.value.clip(0, 1);
+			~updateMasterFX.();
+		};
+
+		StaticText(win, Rect(405, 175, 60, 18)).string = "DUB";
+		dubSlider = Slider(win, Rect(410, 200, 28, 210));
 		dubSlider.orientation = \vertical;
 		dubSlider.value = ~dubAmt.linlin(0, 0.8, 0, 1);
 		dubSlider.action = {
@@ -1186,8 +1301,8 @@ s.waitForBoot({
 			~updateMasterFX.();
 		};
 
-		StaticText(win, Rect(405, 175, 60, 18)).string = "LP";
-		lpSlider = Slider(win, Rect(410, 200, 28, 210));
+		StaticText(win, Rect(460, 175, 60, 18)).string = "LP";
+		lpSlider = Slider(win, Rect(465, 200, 28, 210));
 		lpSlider.orientation = \vertical;
 		lpSlider.value = ~lpFreq.linlin(1500, 14000, 0, 1);
 		lpSlider.action = {
@@ -1195,8 +1310,8 @@ s.waitForBoot({
 			~updateMasterFX.();
 		};
 
-		StaticText(win, Rect(460, 175, 60, 18)).string = "HP";
-		hpSlider = Slider(win, Rect(465, 200, 28, 210));
+		StaticText(win, Rect(515, 175, 60, 18)).string = "HP";
+		hpSlider = Slider(win, Rect(520, 200, 28, 210));
 		hpSlider.orientation = \vertical;
 		hpSlider.value = ~hpFreq.linlin(20, 1500, 0, 1);
 		hpSlider.action = {

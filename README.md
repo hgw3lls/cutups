@@ -150,6 +150,8 @@ cutups-live-gui
 
 Render with **Semi-live track** enabled, then point `SC/cutup.scd` at `out/.../audio_cutups/cutup_01`, press `LOAD LIVE` for the growing track or `LOAD CHUNKS` for the individual chunks, then start SC layers or `SCENE AUTO`.
 
+The tape deck also includes performance ideas retained from older TRANSMISSIONS SuperCollider sketches: a `CNCR` concrete-cut trigger, tape `AGE` in the master strip, and OSC triggers such as `/cutups/stab`, `/cutups/phrase`, `/cutups/concrete`, `/cutups/scene`, `/cutups/stop`, `/cutups/loadLive`, `/cutups/loadChunks`, and `/cutups/master/age`.
+
 Beat-oriented cutups can use manual grid slicing:
 
 ```bash

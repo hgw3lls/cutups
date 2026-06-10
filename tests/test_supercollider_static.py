@@ -17,6 +17,16 @@ class SuperColliderStaticTests(unittest.TestCase):
             "LOAD CHUNKS",
             "*_live_track.wav",
             "chunks",
+            "\\concreteCutTape",
+            "~concreteShot",
+            "CNCR",
+            "\\tapeDeckMaster",
+            "\\cutupsTapedeckConcrete",
+            "/cutups/concrete",
+            "/cutups/loadLive",
+            "/cutups/loadChunks",
+            "/cutups/master/age",
+            "AGE",
         ):
             self.assertIn(marker, text)
 
