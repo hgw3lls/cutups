@@ -12,6 +12,8 @@ import argparse
 import json
 import math
 import shlex
+import socket
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -88,6 +90,38 @@ def open_with_system(path: Path) -> None:
         subprocess.Popen(["cmd", "/c", "start", "", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path)])
+
+
+def osc_string(value: str) -> bytes:
+    data = value.encode("utf-8") + b"\0"
+    return data + (b"\0" * ((4 - (len(data) % 4)) % 4))
+
+
+def build_osc_message(address: str, args: List[object] | Tuple[object, ...] = ()) -> bytes:
+    if not address.startswith("/"):
+        raise ValueError("OSC address must start with /")
+    typetags = ","
+    payload = bytearray()
+    for arg in args:
+        if isinstance(arg, bool):
+            typetags += "i"
+            payload.extend(struct.pack(">i", int(arg)))
+        elif isinstance(arg, int):
+            typetags += "i"
+            payload.extend(struct.pack(">i", arg))
+        elif isinstance(arg, float):
+            typetags += "f"
+            payload.extend(struct.pack(">f", arg))
+        else:
+            typetags += "s"
+            payload.extend(osc_string(str(arg)))
+    return osc_string(address) + osc_string(typetags) + bytes(payload)
+
+
+def send_osc_message(host: str, port: int, address: str, args: List[object] | Tuple[object, ...] = ()) -> None:
+    packet = build_osc_message(address, args)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.sendto(packet, (host, port))
 
 
 def build_render_command(
@@ -371,6 +405,9 @@ class ControlGUI:
     semi_live_var: tk.BooleanVar
     chunk_sec_var: tk.StringVar
     track_path_var: tk.StringVar
+    sc_host_var: tk.StringVar
+    sc_port_var: tk.StringVar
+    sc_age_var: tk.StringVar
     command_box: Any
     last_payload: Dict[str, object]
     section_var: tk.StringVar
@@ -553,6 +590,80 @@ class ControlGUI:
         self.root.clipboard_append(command)
         self.status_var.set("Copied render command")
 
+    def sc_variant_path(self) -> Path:
+        track_raw = self.track_path_var.get().strip()
+        if track_raw and track_raw not in {"Track: waiting", "Waiting for first chunk"}:
+            track_path = Path(track_raw).expanduser()
+            if track_path.suffix.lower() == ".wav":
+                return track_path.parent
+        output = resolve_render_path(self.output_var.get().strip() or "out/gui_render", cutup_script_path().parents[1])
+        return output / "audio_cutups" / "cutup_01"
+
+    def sc_live_source(self) -> Path:
+        track_raw = self.track_path_var.get().strip()
+        if track_raw and track_raw not in {"Track: waiting", "Waiting for first chunk"}:
+            track_path = Path(track_raw).expanduser()
+            if track_path.suffix.lower() == ".wav":
+                return track_path
+        return self.sc_variant_path()
+
+    def send_sc(self, address: str, *args: object) -> None:
+        host = self.sc_host_var.get().strip() or "127.0.0.1"
+        try:
+            port = int(self.sc_port_var.get().strip() or "57120")
+        except ValueError:
+            self.status_var.set("SC port must be an integer")
+            return
+        try:
+            send_osc_message(host, port, address, args)
+        except (OSError, ValueError) as exc:
+            self.status_var.set(f"OSC send failed: {exc}")
+            return
+        rendered_args = " ".join(str(arg) for arg in args)
+        suffix = f" {rendered_args}" if rendered_args else ""
+        self.status_var.set(f"Sent OSC {address}{suffix} -> {host}:{port}")
+
+    def send_sc_load_live(self) -> None:
+        self.send_sc("/cutups/loadLive", str(self.sc_live_source()))
+
+    def send_sc_load_chunks(self) -> None:
+        self.send_sc("/cutups/loadChunks", str(self.sc_variant_path()))
+
+    def send_sc_refresh_chunks(self) -> None:
+        self.send_sc("/cutups/chunks/refresh")
+
+    def send_sc_live_start(self) -> None:
+        self.send_sc("/cutups/live/start", str(self.sc_live_source()))
+
+    def send_sc_live_stop(self) -> None:
+        self.send_sc("/cutups/live/stop")
+
+    def send_sc_stab(self) -> None:
+        self.send_sc("/cutups/stab")
+
+    def send_sc_phrase(self) -> None:
+        self.send_sc("/cutups/phrase")
+
+    def send_sc_concrete(self) -> None:
+        self.send_sc("/cutups/concrete")
+
+    def send_sc_scene_on(self) -> None:
+        self.send_sc("/cutups/scene", 1)
+
+    def send_sc_scene_off(self) -> None:
+        self.send_sc("/cutups/scene", 0)
+
+    def send_sc_stop(self) -> None:
+        self.send_sc("/cutups/stop")
+
+    def send_sc_age(self) -> None:
+        try:
+            age = float(self.sc_age_var.get().strip() or "0")
+        except ValueError:
+            self.status_var.set("SC age must be a number from 0 to 1")
+            return
+        self.send_sc("/cutups/master/age", max(0.0, min(1.0, age)))
+
     def render_log_tail(self, max_lines: int = 6) -> str:
         if not self.render_log_path or not self.render_log_path.exists():
             return ""
@@ -686,6 +797,9 @@ def main() -> None:
     semi_live_var = tk.BooleanVar(value=True)
     chunk_sec_var = tk.StringVar(value="8")
     track_path_var = tk.StringVar(value="Waiting for first chunk")
+    sc_host_var = tk.StringVar(value="127.0.0.1")
+    sc_port_var = tk.StringVar(value="57120")
+    sc_age_var = tk.StringVar(value="0.25")
 
     preset_row = ttk.Frame(frame)
     preset_row.pack(fill=tk.X, pady=(0, 8))
@@ -724,6 +838,9 @@ def main() -> None:
         semi_live_var=semi_live_var,
         chunk_sec_var=chunk_sec_var,
         track_path_var=track_path_var,
+        sc_host_var=sc_host_var,
+        sc_port_var=sc_port_var,
+        sc_age_var=sc_age_var,
         command_box=None,
         last_payload={},
         section_var=section_var,
@@ -798,6 +915,35 @@ def main() -> None:
     ttk.Label(progress_frame, text="Playable track").grid(row=3, column=0, sticky="w", pady=(6, 0))
     ttk.Entry(progress_frame, textvariable=track_path_var, state="readonly").grid(row=3, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
     ttk.Button(progress_frame, text="Open track", command=gui.open_track).grid(row=3, column=2, sticky="e", pady=(6, 0))
+
+    sc_frame = ttk.LabelFrame(frame, text="Send to SuperCollider", padding=8)
+    sc_frame.pack(fill=tk.X, pady=(0, 8))
+    sc_frame.columnconfigure(5, weight=1)
+
+    ttk.Label(sc_frame, text="Host").grid(row=0, column=0, sticky="w")
+    ttk.Entry(sc_frame, textvariable=sc_host_var, width=15).grid(row=0, column=1, sticky="w", padx=(6, 12))
+    ttk.Label(sc_frame, text="Port").grid(row=0, column=2, sticky="w")
+    ttk.Entry(sc_frame, textvariable=sc_port_var, width=8).grid(row=0, column=3, sticky="w", padx=(6, 12))
+    ttk.Label(sc_frame, text="Age").grid(row=0, column=4, sticky="w")
+    ttk.Entry(sc_frame, textvariable=sc_age_var, width=7).grid(row=0, column=5, sticky="w", padx=(6, 0))
+
+    sc_row_a = ttk.Frame(sc_frame)
+    sc_row_a.grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
+    ttk.Button(sc_row_a, text="Load live", command=gui.send_sc_load_live).pack(side=tk.LEFT)
+    ttk.Button(sc_row_a, text="Load chunks", command=gui.send_sc_load_chunks).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_a, text="Refresh chunks", command=gui.send_sc_refresh_chunks).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_a, text="Live start", command=gui.send_sc_live_start).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_a, text="Live stop", command=gui.send_sc_live_stop).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_a, text="Scene on", command=gui.send_sc_scene_on).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_a, text="Scene off", command=gui.send_sc_scene_off).pack(side=tk.LEFT, padx=(6, 0))
+
+    sc_row_b = ttk.Frame(sc_frame)
+    sc_row_b.grid(row=2, column=0, columnspan=6, sticky="w", pady=(6, 0))
+    ttk.Button(sc_row_b, text="Stab", command=gui.send_sc_stab).pack(side=tk.LEFT)
+    ttk.Button(sc_row_b, text="Phrase", command=gui.send_sc_phrase).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_b, text="Concrete", command=gui.send_sc_concrete).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_b, text="Send age", command=gui.send_sc_age).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_b, text="Stop all", command=gui.send_sc_stop).pack(side=tk.LEFT, padx=(6, 0))
 
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(2, 10))

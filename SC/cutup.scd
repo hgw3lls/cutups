@@ -10,6 +10,8 @@ FIXES
 - READY only after buffers are actually added
 - SCENE AUTO checks real buffer count
 - can load a Python cutups live track or semi-live chunks folder
+- LOAD CHUNKS auto-refreshes newly written chunk files
+- LIVE TRACK follows the growing Python WAV on a dedicated layer
 
 USAGE
 1. Boot server
@@ -46,6 +48,7 @@ s.waitForBoot({
 	~mixBus = nil;
 	~master = nil;
 
+	~liveGroup = nil;
 	~cutsGroup = nil;
 	~loopsGroup = nil;
 	~ghostsGroup = nil;
@@ -58,6 +61,19 @@ s.waitForBoot({
 	~loadDoneCount = 0;
 	~loadFailCount = 0;
 	~loadedCount = 0;
+	~loadedPaths = Dictionary.new;
+
+	~chunkRefreshRoutine = nil;
+	~chunkRefreshSec = 3.0;
+	~chunkSourceRoot = nil;
+
+	~liveTrackPath = nil;
+	~liveTrackBuf = nil;
+	~liveTrackSynth = nil;
+	~liveTrackRoutine = nil;
+	~liveTrackFrames = 0;
+	~liveTrackAmp = 0.65;
+	~liveTrackRefreshSec = 4.0;
 
 	~density = \medium;
 
@@ -97,6 +113,7 @@ s.waitForBoot({
 	~ghostsBtn = nil;
 	~cloudBtn = nil;
 	~sceneBtn = nil;
+	~liveBtn = nil;
 
 	// ============================================================
 	// UI HELPERS
@@ -133,6 +150,7 @@ s.waitForBoot({
 			if(~ghostsBtn.notNil) { ~ghostsBtn.value = 0 };
 			if(~cloudBtn.notNil) { ~cloudBtn.value = 0 };
 			if(~sceneBtn.notNil) { ~sceneBtn.value = 0 };
+			if(~liveBtn.notNil) { ~liveBtn.value = 0 };
 		}.defer;
 	};
 
@@ -141,12 +159,14 @@ s.waitForBoot({
 	// ============================================================
 
 	~makeGroups = {
+		if(~liveGroup.notNil)   { try { ~liveGroup.free } };
 		if(~cutsGroup.notNil)   { try { ~cutsGroup.free } };
 		if(~loopsGroup.notNil)  { try { ~loopsGroup.free } };
 		if(~ghostsGroup.notNil) { try { ~ghostsGroup.free } };
 		if(~cloudGroup.notNil)  { try { ~cloudGroup.free } };
 
-		~cutsGroup   = Group.head(s);
+		~liveGroup   = Group.head(s);
+		~cutsGroup   = Group.after(~liveGroup);
 		~loopsGroup  = Group.after(~cutsGroup);
 		~ghostsGroup = Group.after(~loopsGroup);
 		~cloudGroup  = Group.after(~ghostsGroup);
@@ -179,6 +199,18 @@ s.waitForBoot({
 		{ if(~cloudBtn.notNil) { ~cloudBtn.value = 0 } }.defer;
 	};
 
+	~hardStopLiveTrack = {
+		if(~liveTrackRoutine.notNil) { try { ~liveTrackRoutine.stop } };
+		~liveTrackRoutine = nil;
+		if(~liveTrackSynth.notNil) { try { ~liveTrackSynth.set(\gate, 0) } };
+		~liveTrackSynth = nil;
+		if(~liveTrackBuf.notNil) { try { ~liveTrackBuf.free } };
+		~liveTrackBuf = nil;
+		~liveTrackFrames = 0;
+		~active.removeAt(\liveTrack);
+		{ if(~liveBtn.notNil) { ~liveBtn.value = 0 } }.defer;
+	};
+
 	~stopSceneOnly = {
 		if(~active[\scene].notNil and: { ~active[\scene].respondsTo(\stop) }) {
 			try { ~active[\scene].stop };
@@ -188,6 +220,7 @@ s.waitForBoot({
 	};
 
 	~stopLayers = {
+		~hardStopLiveTrack.();
 		~hardStopCuts.();
 		~hardStopLoops.();
 		~hardStopGhosts.();
@@ -205,13 +238,16 @@ s.waitForBoot({
 		~isLoading = false;
 		~active.removeAt(\loader);
 		~loaderRoutine = nil;
+		if(~stopChunkRefresh.notNil) { ~stopChunkRefresh.() };
 	};
 
 	~freeBuffers = {
+		~hardStopLiveTrack.();
 		~buffers.do { |b| try { b.free } };
 		~buffers.clear;
 		~sampleMeta.clear;
 		~allPaths.clear;
+		~loadedPaths.clear;
 		~loadDoneCount = 0;
 		~loadFailCount = 0;
 		~loadedCount = 0;
@@ -345,15 +381,17 @@ s.waitForBoot({
 		^[files.last].as(List);
 	};
 
-	~scanChunksFolder = { |root|
+	~scanChunksFolder = { |root, quiet=false|
 		var path, dir, chunksDir, files, pattern;
 
 		path = root.asString.standardizePath;
 
 		if(File.exists(path).not) {
-			~setStatus.("Path not found");
-			~setCount.("Loaded: 0");
-			~setProgress.(0);
+			if(quiet.not) {
+				~setStatus.("Path not found");
+				~setCount.("Loaded: 0");
+				~setProgress.(0);
+			};
 			^List.new;
 		};
 
@@ -365,7 +403,7 @@ s.waitForBoot({
 
 		chunksDir = dir;
 		pattern = chunksDir +/+ "*.wav";
-		("CHUNKS PATTERN: " ++ pattern).postln;
+		if(quiet.not) { ("CHUNKS PATTERN: " ++ pattern).postln };
 		files = pattern.pathMatch;
 		if(files.isNil) { files = [] };
 		files = files.asArray.sort;
@@ -373,22 +411,26 @@ s.waitForBoot({
 		if(files.isEmpty) {
 			chunksDir = dir +/+ "chunks";
 			pattern = chunksDir +/+ "*.wav";
-			("CHUNKS PATTERN: " ++ pattern).postln;
+			if(quiet.not) { ("CHUNKS PATTERN: " ++ pattern).postln };
 			files = pattern.pathMatch;
 			if(files.isNil) { files = [] };
 			files = files.asArray.sort;
 		};
 
 		if(files.isEmpty) {
-			~setStatus.("No chunk .wav files found");
-			~setCount.("Loaded: 0");
-			~setProgress.(0);
+			if(quiet.not) {
+				~setStatus.("No chunk .wav files found");
+				~setCount.("Loaded: 0");
+				~setProgress.(0);
+			};
 			^List.new;
 		};
 
-		~setStatus.("Chunks found");
-		~setCount.("Found: " ++ files.size);
-		~setProgress.(0.2);
+		if(quiet.not) {
+			~setStatus.("Chunks found");
+			~setCount.("Found: " ++ files.size);
+			~setProgress.(0.2);
+		};
 		^files.as(List);
 	};
 
@@ -457,9 +499,94 @@ s.waitForBoot({
 	// LOADING
 	// ============================================================
 
+	~appendChunkPath = { |path|
+		var normalized;
+
+		normalized = path.asString.standardizePath;
+
+		if(~loadedPaths[normalized].notNil) {
+			^nil;
+		};
+
+		~loadedPaths[normalized] = \queued;
+
+		Buffer.read(s, normalized, action: { |b|
+			var dur;
+
+			if(b.notNil and: { b.numFrames > 0 }) {
+				dur = b.numFrames / b.sampleRate;
+
+				~buffers.add(b);
+				~sampleMeta.add((
+					path: normalized,
+					name: PathName.new(normalized).fileName,
+					dur: dur,
+					frames: b.numFrames,
+					sr: b.sampleRate,
+					bufnum: b.bufnum
+				));
+				~allPaths.add(normalized);
+				~loadedPaths[normalized] = true;
+				~loadedCount = ~loadedCount + 1;
+				~loadTargetCount = ~loadTargetCount.max(~loadedCount);
+
+				("CHUNK BUFFER OK: " ++ PathName.new(normalized).fileName ++ " | loaded=" ++ ~loadedCount).postln;
+				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount);
+				~setStatus.("Chunk loaded: " ++ PathName.new(normalized).fileName);
+				if(~loadTargetCount > 0) {
+					~setProgress.(~loadedCount / ~loadTargetCount);
+				};
+			} {
+				~loadedPaths.removeAt(normalized);
+				if(b.notNil) { try { b.free } };
+				("CHUNK BUFFER FAIL: " ++ normalized).warn;
+			};
+		});
+	};
+
+	~refreshChunksOnce = {
+		var root, files, newFiles;
+
+		root = if(~chunkSourceRoot.notNil) {
+			~chunkSourceRoot.asString.standardizePath;
+		} {
+			~sampleRoot.asString.standardizePath;
+		};
+
+		files = ~scanChunksFolder.(root, true);
+		newFiles = files.select { |path| ~loadedPaths[path.asString.standardizePath].isNil };
+
+		if(newFiles.notEmpty) {
+			~loadTargetCount = ~loadTargetCount.max(~loadedCount + newFiles.size);
+			("CHUNK REFRESH: new=" ++ newFiles.size ++ " root=" ++ root).postln;
+			newFiles.do { |path| ~appendChunkPath.(path) };
+		};
+	};
+
+	~stopChunkRefresh = {
+		if(~chunkRefreshRoutine.notNil) { try { ~chunkRefreshRoutine.stop } };
+		~chunkRefreshRoutine = nil;
+		~active.removeAt(\chunkRefresh);
+	};
+
+	~startChunkRefresh = {
+		~stopChunkRefresh.();
+		~chunkSourceRoot = ~sampleRoot.asString.standardizePath;
+		~chunkRefreshRoutine = Routine({
+			loop {
+				~chunkRefreshSec.wait;
+				~refreshChunksOnce.();
+			};
+		}).play(SystemClock);
+		~active[\chunkRefresh] = ~chunkRefreshRoutine;
+		~setStatus.("Chunk auto-refresh on");
+	};
+
 	~loadOnePath = { |path, attemptId|
 		Buffer.read(s, path, action: { |b|
-			var dur;
+			var dur, normalized;
+
+			normalized = path.asString.standardizePath;
 
 			if(attemptId != ~loadAttemptId) {
 				if(b.notNil) { try { b.free } };
@@ -480,6 +607,7 @@ s.waitForBoot({
 					sr: b.sampleRate,
 					bufnum: b.bufnum
 				));
+				~loadedPaths[normalized] = true;
 
 				~loadedCount = ~loadedCount + 1;
 
@@ -509,6 +637,14 @@ s.waitForBoot({
 					~setStatus.("READY");
 					~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount);
 					~setProgress.(1.0);
+					if(~loadMode == \chunks) {
+						~startChunkRefresh.();
+					};
+					if(~loadMode == \live) {
+						if(~allPaths.notEmpty) {
+							~startLiveTrack.(~allPaths[0]);
+						};
+					};
 				} {
 					("READY FAILED: loaded=" ++ ~loadedCount ++ " target=" ++ ~loadTargetCount ++ " fail=" ++ ~loadFailCount).warn;
 					~setStatus.("Load failed — no usable buffers");
@@ -620,6 +756,16 @@ s.waitForBoot({
 		Out.ar(out, sig);
 	}).add;
 
+	SynthDef(\liveTrackTape, {
+		|out=0, buf=0, amp=0.65, rate=1.0, gate=1, atk=0.08, rel=1.2, lp=16000, hp=30|
+		var env, sig;
+
+		env = EnvGen.kr(Env.asr(atk, 1, rel), gate, doneAction: 2);
+		sig = PlayBuf.ar(2, buf, BufRateScale.kr(buf) * rate, loop: 1);
+		sig = HPF.ar(LPF.ar(sig, lp), hp);
+		Out.ar(out, sig * env * amp);
+	}).add;
+
 	SynthDef(\ghostPlayerTape, {
 		|out=0, buf=0, amp=0.14, rate=(-0.5), start=0.85, pan=0, lp=3500, hp=220, rel=3.5|
 		var frames, pos, env, sig;
@@ -722,6 +868,113 @@ s.waitForBoot({
 				\hp, ~hpFreq
 			);
 		};
+	};
+
+	~updateLiveTrackAmp = {
+		if(~liveTrackSynth.notNil) {
+			~liveTrackSynth.set(\amp, ~liveTrackAmp);
+		};
+	};
+
+	~resolveLiveTrackPath = { |root|
+		var path, files;
+
+		path = root.asString.standardizePath;
+
+		if(File.exists(path) and: { PathName.new(path).isFile }) {
+			^path;
+		};
+
+		files = ~scanLiveTrack.(path);
+		if(files.notEmpty) {
+			^files[0].asString.standardizePath;
+		};
+
+		^nil;
+	};
+
+	~readLiveTrackBuffer = { |force=false|
+		var path;
+
+		path = ~liveTrackPath;
+
+		if(path.isNil or: { File.exists(path).not }) {
+			~setStatus.("Live track missing");
+			^false;
+		};
+
+		Buffer.read(s, path, action: { |b|
+			var oldSynth, oldBuf, changed;
+
+			if(b.notNil and: { b.numFrames > 0 }) {
+				changed = force or: { b.numFrames != ~liveTrackFrames };
+
+				if(changed) {
+					oldSynth = ~liveTrackSynth;
+					oldBuf = ~liveTrackBuf;
+					~liveTrackBuf = b;
+					~liveTrackFrames = b.numFrames;
+					~liveTrackSynth = Synth.head(~liveGroup, \liveTrackTape, [
+						\out, ~mixBus,
+						\buf, b.bufnum,
+						\amp, ~liveTrackAmp
+					]);
+					if(oldSynth.notNil) { try { oldSynth.set(\gate, 0) } };
+					if(oldBuf.notNil) {
+						Routine({
+							1.6.wait;
+							try { oldBuf.free };
+						}).play(SystemClock);
+					};
+					~setStatus.("Live track refreshed: " ++ PathName.new(path).fileName);
+				} {
+					try { b.free };
+				};
+			} {
+				if(b.notNil) { try { b.free } };
+				~setStatus.("Live track read failed");
+			};
+		});
+
+		^true;
+	};
+
+	~startLiveTrackRefresh = {
+		if(~liveTrackRoutine.notNil) { try { ~liveTrackRoutine.stop } };
+		~liveTrackRoutine = Routine({
+			loop {
+				~liveTrackRefreshSec.wait;
+				~readLiveTrackBuffer.(false);
+			};
+		}).play(SystemClock);
+		~active[\liveTrack] = ~liveTrackRoutine;
+	};
+
+	~startLiveTrack = { |path=nil|
+		var resolved;
+
+		if(path.notNil and: { path.asString.size > 0 }) {
+			resolved = ~resolveLiveTrackPath.(path);
+		} {
+			if(~liveTrackPath.notNil and: { File.exists(~liveTrackPath) and: { PathName.new(~liveTrackPath).isFile } }) {
+				resolved = ~liveTrackPath;
+			} {
+				resolved = ~resolveLiveTrackPath.(~sampleRoot);
+			};
+		};
+
+		if(resolved.isNil) {
+			~setStatus.("No live track found");
+			{ if(~liveBtn.notNil) { ~liveBtn.value = 0 } }.defer;
+			^false;
+		};
+
+		~liveTrackPath = resolved.asString.standardizePath;
+		~readLiveTrackBuffer.(true);
+		~startLiveTrackRefresh.();
+		{ if(~liveBtn.notNil) { ~liveBtn.value = 1 } }.defer;
+		~setStatus.("Live track following: " ++ PathName.new(~liveTrackPath).fileName);
+		^true;
 	};
 
 	// ============================================================
@@ -1101,6 +1354,27 @@ s.waitForBoot({
 			~loadMode = \chunks;
 			~loadSamplesAsync.();
 		}, "/cutups/loadChunks");
+		OSCdef(\cutupsTapedeckChunksRefresh, {
+			~refreshChunksOnce.();
+		}, "/cutups/chunks/refresh");
+		OSCdef(\cutupsTapedeckLiveStart, { |msg|
+			if(msg.size > 1) {
+				~startLiveTrack.(msg[1].asString);
+			} {
+				~startLiveTrack.();
+			};
+		}, "/cutups/live/start");
+		OSCdef(\cutupsTapedeckLiveStop, {
+			~hardStopLiveTrack.();
+			~setStatus.("Live track stopped");
+		}, "/cutups/live/stop");
+		OSCdef(\cutupsTapedeckLiveAmp, { |msg|
+			if(msg.size > 1) {
+				~liveTrackAmp = msg[1].asFloat.clip(0, 1.5);
+				~updateLiveTrackAmp.();
+				~setStatus.("Live track amp: " ++ ~liveTrackAmp.round(0.001));
+			};
+		}, "/cutups/live/amp");
 		OSCdef(\cutupsTapedeckMasterAge, { |msg|
 			if(msg.size > 1) {
 				~ageAmt = msg[1].asFloat.clip(0, 1);
@@ -1108,7 +1382,7 @@ s.waitForBoot({
 				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
 			};
 		}, "/cutups/master/age");
-		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/master/age".postln;
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/master/age".postln;
 	};
 
 	~installOSC.();
@@ -1123,6 +1397,7 @@ s.waitForBoot({
 		var masterSlider, driveSlider, wowSlider, flutterSlider, dropoutSlider, dirtSlider, ageSlider, dubSlider, lpSlider, hpSlider;
 		var cutsSlider, loopsSlider, ghostsSlider, cloudSlider;
 		var cutsMuteBtn, loopsMuteBtn, ghostsMuteBtn, cloudMuteBtn;
+		var liveAmpSlider;
 
 		win = Window("TRANSMISSIONS TAPE-DECK — WAV DIRECT LOAD", Rect(60, 60, 1140, 680)).front;
 		win.alwaysOnTop = true;
@@ -1405,7 +1680,7 @@ s.waitForBoot({
 				};
 			});
 
-		StaticText(win, Rect(900, 175, 180, 18)).string = "TRANSPORT / SCENE";
+		StaticText(win, Rect(900, 175, 180, 18)).string = "TRANSPORT / LIVE";
 
 		~sceneBtn = Button(win, Rect(900, 210, 170, 36))
 			.states_([["SCENE AUTO"], ["SCENE ON"]])
@@ -1422,14 +1697,41 @@ s.waitForBoot({
 				};
 			});
 
-		Button(win, Rect(900, 260, 170, 36))
+		~liveBtn = Button(win, Rect(900, 260, 170, 32))
+			.states_([["LIVE TRACK"], ["LIVE ON"]])
+			.action_({
+				if(~liveBtn.value == 1) {
+					~startLiveTrack.(pathField.string);
+				} {
+					~hardStopLiveTrack.();
+					~setStatus.("Live track stopped");
+				};
+			});
+
+		StaticText(win, Rect(900, 302, 70, 18)).string = "LIVE AMP";
+		liveAmpSlider = Slider(win, Rect(970, 304, 100, 18));
+		liveAmpSlider.orientation = \horizontal;
+		liveAmpSlider.value = ~liveTrackAmp.clip(0, 1);
+		liveAmpSlider.action = {
+			~liveTrackAmp = liveAmpSlider.value.linlin(0, 1, 0.0, 1.5);
+			~updateLiveTrackAmp.();
+		};
+
+		Button(win, Rect(900, 335, 170, 32))
 			.states_([["RELOAD TAPES"]])
 			.action_({
 				~sampleRoot = pathField.string;
 				~loadSamplesAsync.();
 			});
 
-		Button(win, Rect(900, 310, 170, 36))
+		Button(win, Rect(900, 380, 170, 32))
+			.states_([["REFRESH CHUNKS"]])
+			.action_({
+				~chunkSourceRoot = pathField.string;
+				~refreshChunksOnce.();
+			});
+
+		Button(win, Rect(900, 425, 170, 32))
 			.states_([["STOP LOAD"]])
 			.action_({
 				~stopLoader.();
@@ -1437,7 +1739,7 @@ s.waitForBoot({
 				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount ++ " (stopped)");
 			});
 
-		Button(win, Rect(900, 360, 170, 36))
+		Button(win, Rect(900, 470, 170, 32))
 			.states_([["FREE BUFFERS"]])
 			.action_({
 				~stopLoader.();
@@ -1446,7 +1748,7 @@ s.waitForBoot({
 				~setStatus.("Buffers freed");
 			});
 
-		Button(win, Rect(900, 410, 170, 36))
+		Button(win, Rect(900, 515, 170, 32))
 			.states_([["KILL ALL"]])
 			.action_({
 				~stopLoader.();

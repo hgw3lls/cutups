@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import struct
 import sys
 import tempfile
 import types
@@ -81,6 +82,25 @@ class LiveControlTests(unittest.TestCase):
         self.assertIn("## qa-sources", text)
         self.assertIn("--init-qa-sources ../cutups_qa_sources", text)
         self.assertIn("## signal-breach", text)
+
+    def test_live_gui_build_osc_message_encodes_common_types(self) -> None:
+        packet = live_control_gui.build_osc_message("/cutups/test", ["hello", 7, 0.5])
+        self.assertEqual(len(packet) % 4, 0)
+        self.assertIn(b"/cutups/test\0", packet)
+        self.assertIn(b",sif\0", packet)
+        self.assertIn(b"hello\0", packet)
+        self.assertTrue(packet.endswith(struct.pack(">i", 7) + struct.pack(">f", 0.5)))
+        with self.assertRaises(ValueError):
+            live_control_gui.build_osc_message("cutups/test")
+
+    def test_live_gui_send_osc_message_uses_udp_socket(self) -> None:
+        with mock.patch.object(live_control_gui.socket, "socket") as socket_factory:
+            sock = socket_factory.return_value.__enter__.return_value
+            live_control_gui.send_osc_message("127.0.0.1", 57120, "/cutups/stab")
+        socket_factory.assert_called_once_with(live_control_gui.socket.AF_INET, live_control_gui.socket.SOCK_DGRAM)
+        packet, target = sock.sendto.call_args.args
+        self.assertIn(b"/cutups/stab\0", packet)
+        self.assertEqual(target, ("127.0.0.1", 57120))
 
     def test_build_audio_plan_summarizes_events(self) -> None:
         event = cutup.Event(

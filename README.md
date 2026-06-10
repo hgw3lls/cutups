@@ -148,9 +148,11 @@ Typical bridge workflow:
 cutups-live-gui
 ```
 
-Render with **Semi-live track** enabled, then point `SC/cutup.scd` at `out/.../audio_cutups/cutup_01`, press `LOAD LIVE` for the growing track or `LOAD CHUNKS` for the individual chunks, then start SC layers or `SCENE AUTO`.
+Render with **Semi-live track** enabled, then point `SC/cutup.scd` at `out/.../audio_cutups/cutup_01`, press `LOAD LIVE` for the growing track or `LOAD CHUNKS` for the individual chunks, then start SC layers or `SCENE AUTO`. `LOAD CHUNKS` keeps auto-refreshing new files written into `chunks/`, so the fragment engines can pick up fresh material while Python is still rendering.
 
-The tape deck also includes performance ideas retained from older TRANSMISSIONS SuperCollider sketches: a `CNCR` concrete-cut trigger, tape `AGE` in the master strip, and OSC triggers such as `/cutups/stab`, `/cutups/phrase`, `/cutups/concrete`, `/cutups/scene`, `/cutups/stop`, `/cutups/loadLive`, `/cutups/loadChunks`, and `/cutups/master/age`.
+The Python GUI includes a **Send to SuperCollider** panel that sends OSC to `127.0.0.1:57120` by default. Use `Load live`, `Load chunks`, `Refresh chunks`, `Live start`, `Live stop`, `Scene on/off`, `Stab`, `Phrase`, `Concrete`, `Send age`, and `Stop all` from the same window that starts the render.
+
+The tape deck also includes performance ideas retained from older TRANSMISSIONS SuperCollider sketches: a `CNCR` concrete-cut trigger, tape `AGE` in the master strip, and OSC triggers such as `/cutups/stab`, `/cutups/phrase`, `/cutups/concrete`, `/cutups/scene`, `/cutups/stop`, `/cutups/loadLive`, `/cutups/loadChunks`, `/cutups/chunks/refresh`, `/cutups/live/start`, `/cutups/live/stop`, `/cutups/live/amp`, and `/cutups/master/age`. The dedicated `LIVE TRACK` layer continuously reloads/restarts the growing `*_live_track.wav` with a short fade instead of interrupting the fragment buffers.
 
 Beat-oriented cutups can use manual grid slicing:
 
