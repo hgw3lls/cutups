@@ -668,6 +668,18 @@ class ControlGUI:
     def send_sc_bed_reverse(self) -> None:
         self.send_sc("/cutups/scLive/bed/reverse")
 
+    def send_sc_bed_slot_a(self) -> None:
+        self.send_sc("/cutups/scLive/bed/slot", "A")
+
+    def send_sc_bed_slot_b(self) -> None:
+        self.send_sc("/cutups/scLive/bed/slot", "B")
+
+    def send_sc_bed_slot_c(self) -> None:
+        self.send_sc("/cutups/scLive/bed/slot", "C")
+
+    def send_sc_bed_slots_clear(self) -> None:
+        self.send_sc("/cutups/scLive/bed/slot/clear")
+
     def send_sc_native_stab(self) -> None:
         self.send_sc("/cutups/scLive/stab")
 
@@ -999,6 +1011,14 @@ def main() -> None:
     ttk.Button(sc_row_d, text="Bed on", command=gui.send_sc_bed_start).pack(side=tk.LEFT, padx=(12, 0))
     ttk.Button(sc_row_d, text="Bed off", command=gui.send_sc_bed_stop).pack(side=tk.LEFT, padx=(6, 0))
     ttk.Button(sc_row_d, text="Bed rev", command=gui.send_sc_bed_reverse).pack(side=tk.LEFT, padx=(6, 0))
+
+    sc_row_e = ttk.Frame(sc_frame)
+    sc_row_e.grid(row=5, column=0, columnspan=6, sticky="w", pady=(6, 0))
+    ttk.Label(sc_row_e, text="Bed slots").pack(side=tk.LEFT)
+    ttk.Button(sc_row_e, text="A", command=gui.send_sc_bed_slot_a, width=4).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(sc_row_e, text="B", command=gui.send_sc_bed_slot_b, width=4).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_e, text="C", command=gui.send_sc_bed_slot_c, width=4).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_e, text="Clear", command=gui.send_sc_bed_slots_clear).pack(side=tk.LEFT, padx=(6, 0))
 
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(2, 10))

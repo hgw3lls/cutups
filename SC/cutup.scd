@@ -99,6 +99,8 @@ s.waitForBoot({
 	~bedMaxDur = 32.0;
 	~bedDropout = 0.035;
 	~bedReverse = false;
+	~bedSlots = IdentityDictionary.new;
+	~bedSlotBtns = IdentityDictionary.new;
 
 	~density = \medium;
 
@@ -184,6 +186,7 @@ s.waitForBoot({
 			if(~liveInBtn.notNil) { ~liveInBtn.value = 0 };
 			if(~liveCutBtn.notNil) { ~liveCutBtn.value = 0 };
 			if(~bedBtn.notNil) { ~bedBtn.value = 0 };
+			~bedSlotBtns.valuesDo { |btn| if(btn.notNil) { btn.value = 0 } };
 		}.defer;
 	};
 
@@ -260,8 +263,12 @@ s.waitForBoot({
 		if(~bedRoutine.notNil) { try { ~bedRoutine.stop } };
 		~bedRoutine = nil;
 		if(~bedGroup.notNil) { try { ~bedGroup.freeAll } };
+		~bedSlots.clear;
 		~active.removeAt(\bedLoops);
-		{ if(~bedBtn.notNil) { ~bedBtn.value = 0 } }.defer;
+		{
+			if(~bedBtn.notNil) { ~bedBtn.value = 0 };
+			~bedSlotBtns.valuesDo { |btn| if(btn.notNil) { btn.value = 0 } };
+		}.defer;
 	};
 
 	~hardStopLiveInput = {
@@ -1447,6 +1454,11 @@ s.waitForBoot({
 
 	~setBedReverse = { |flag|
 		~bedReverse = flag.asInteger > 0;
+		~bedSlots.valuesDo { |synth|
+			if(synth.notNil) {
+				try { synth.set(\reverse, ~bedReverse.binaryValue) };
+			};
+		};
 		{
 			if(~bedReverseBtn.notNil) {
 				~bedReverseBtn.value = ~bedReverse.binaryValue;
@@ -1455,8 +1467,8 @@ s.waitForBoot({
 		~setStatus.("Bed reverse: " ++ ~bedReverse.asString);
 	};
 
-	~fireBedLoop = {
-		var source, idx, meta, sampleDur, playDur, windowDur, windowMin, windowMax, startSec, loopStart, loopEnd, pan, rate, rev;
+	~fireBedLoop = { |held=false|
+		var source, idx, meta, sampleDur, playDur, windowDur, windowMin, windowMax, startSec, loopStart, loopEnd, pan, rate, rev, synth;
 
 		source = ~chooseScCutSource.();
 
@@ -1472,7 +1484,7 @@ s.waitForBoot({
 			^nil;
 		};
 
-		playDur = ~bedPlayTime.();
+		playDur = if(held) { 86400.0 } { ~bedPlayTime.() };
 		pan = rrand(-0.85, 0.85);
 		rate = [0.5, 0.75, 1.0, 1.0, 1.08, 1.15].choose;
 		rev = (~bedReverse or: { 0.16.coin }).binaryValue;
@@ -1488,7 +1500,7 @@ s.waitForBoot({
 			loopStart = ~liveRecentStart.().min(1.0 - (windowDur / sampleDur).clip(0.02, 0.95)).max(0.0);
 			loopEnd = (loopStart + (windowDur / sampleDur)).clip(0.01, 1.0);
 
-			Synth.head(~bedGroup, \liveBedLoopTape, [
+			synth = Synth.head(~bedGroup, \liveBedLoopTape, [
 				\out, ~mixBus,
 				\buf, ~liveInputBuf.bufnum,
 				\amp, ~bedAmp,
@@ -1518,7 +1530,7 @@ s.waitForBoot({
 			loopStart = (startSec / sampleDur).clip(0.0, 0.998);
 			loopEnd = ((startSec + windowDur) / sampleDur).clip(0.001, 1.0);
 
-			Synth.head(~bedGroup, \bedLoopTape, [
+			synth = Synth.head(~bedGroup, \bedLoopTape, [
 				\out, ~mixBus,
 				\buf, ~buffers[idx].bufnum,
 				\amp, ~bedAmp,
@@ -1531,6 +1543,69 @@ s.waitForBoot({
 				\dropout, ~bedDropout
 			]);
 		};
+
+		^synth;
+	};
+
+	~stopBedSlot = { |key|
+		var slotKey, synth;
+
+		slotKey = key.asSymbol;
+		synth = ~bedSlots[slotKey];
+		if(synth.notNil) {
+			try { synth.free };
+		};
+		~bedSlots.removeAt(slotKey);
+		{
+			if(~bedSlotBtns[slotKey].notNil) {
+				~bedSlotBtns[slotKey].value = 0;
+			};
+		}.defer;
+		~setStatus.("Bed slot " ++ slotKey.asString ++ " stopped");
+	};
+
+	~startBedSlot = { |key|
+		var slotKey, synth;
+
+		slotKey = key.asSymbol;
+		if(~bedSlots[slotKey].notNil) {
+			~stopBedSlot.(slotKey);
+		};
+
+		synth = ~fireBedLoop.(true);
+		if(synth.notNil) {
+			~bedSlots[slotKey] = synth;
+			{
+				if(~bedSlotBtns[slotKey].notNil) {
+					~bedSlotBtns[slotKey].value = 1;
+				};
+			}.defer;
+			~setStatus.("Bed slot " ++ slotKey.asString ++ " holding");
+			^true;
+		};
+
+		{
+			if(~bedSlotBtns[slotKey].notNil) {
+				~bedSlotBtns[slotKey].value = 0;
+			};
+		}.defer;
+		^false;
+	};
+
+	~toggleBedSlot = { |key|
+		var slotKey;
+
+		slotKey = key.asSymbol;
+		if(~bedSlots[slotKey].notNil) {
+			~stopBedSlot.(slotKey);
+		} {
+			~startBedSlot.(slotKey);
+		};
+	};
+
+	~clearBedSlots = {
+		[\A, \B, \C].do { |slotKey| ~stopBedSlot.(slotKey) };
+		~setStatus.("Bed slots cleared");
 	};
 
 	~startBedLoops = {
@@ -2031,6 +2106,18 @@ s.waitForBoot({
 				~setStatus.("Bed timing updated");
 			};
 		}, "/cutups/scLive/bed/timing");
+		OSCdef(\cutupsTapedeckScLiveBedSlot, { |msg|
+			if(msg.size > 1) {
+				~toggleBedSlot.(msg[1].asSymbol);
+			};
+		}, "/cutups/scLive/bed/slot");
+		OSCdef(\cutupsTapedeckScLiveBedSlotClear, { |msg|
+			if(msg.size > 1) {
+				~stopBedSlot.(msg[1].asSymbol);
+			} {
+				~clearBedSlots.();
+			};
+		}, "/cutups/scLive/bed/slot/clear");
 		OSCdef(\cutupsTapedeckMasterAge, { |msg|
 			if(msg.size > 1) {
 				~ageAmt = msg[1].asFloat.clip(0, 1);
@@ -2038,7 +2125,7 @@ s.waitForBoot({
 				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
 			};
 		}, "/cutups/master/age");
-		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/master/age".postln;
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
 	};
 
 	~installOSC.();
@@ -2057,7 +2144,7 @@ s.waitForBoot({
 		var bedWaitMinBox, bedWaitMaxBox, bedDurMinBox, bedDurMaxBox;
 		var scCutSourceMenu;
 
-		win = Window("TRANSMISSIONS TAPE-DECK — DIRECT LOAD", Rect(60, 60, 1140, 900)).front;
+		win = Window("TRANSMISSIONS TAPE-DECK — DIRECT LOAD", Rect(60, 60, 1140, 940)).front;
 		win.alwaysOnTop = true;
 
 		StaticText(win, Rect(20, 15, 100, 20)).string = "SOURCE";
@@ -2412,16 +2499,30 @@ s.waitForBoot({
 			.states_([["BED FWD"], ["BED REV"]])
 			.action_({ ~setBedReverse.(~bedReverseBtn.value) });
 
-		Button(win, Rect(900, 411, 82, 28))
+		StaticText(win, Rect(900, 413, 42, 18)).string = "SLOTS";
+		~bedSlotBtns[\A] = Button(win, Rect(945, 409, 28, 24))
+			.states_([["A"], ["A*"]])
+			.action_({ ~toggleBedSlot.(\A) });
+		~bedSlotBtns[\B] = Button(win, Rect(978, 409, 28, 24))
+			.states_([["B"], ["B*"]])
+			.action_({ ~toggleBedSlot.(\B) });
+		~bedSlotBtns[\C] = Button(win, Rect(1011, 409, 28, 24))
+			.states_([["C"], ["C*"]])
+			.action_({ ~toggleBedSlot.(\C) });
+		Button(win, Rect(1044, 409, 34, 24))
+			.states_([["CLR"]])
+			.action_({ ~clearBedSlots.() });
+
+		Button(win, Rect(900, 445, 82, 28))
 			.states_([["LIVE STAB"]])
 			.action_({ ~liveInputShot.(\stab) });
 
-		Button(win, Rect(988, 411, 82, 28))
+		Button(win, Rect(988, 445, 82, 28))
 			.states_([["LIVE GLCH"]])
 			.action_({ ~liveInputShot.(\glitch) });
 
-		StaticText(win, Rect(900, 450, 58, 18)).string = "IN MON";
-		liveInputMonitorSlider = Slider(win, Rect(960, 452, 110, 18));
+		StaticText(win, Rect(900, 484, 58, 18)).string = "IN MON";
+		liveInputMonitorSlider = Slider(win, Rect(960, 486, 110, 18));
 		liveInputMonitorSlider.orientation = \horizontal;
 		liveInputMonitorSlider.value = ~liveInputMonitor.clip(0, 1);
 		liveInputMonitorSlider.action = {
@@ -2429,24 +2530,24 @@ s.waitForBoot({
 			~updateLiveInputMonitor.();
 		};
 
-		StaticText(win, Rect(900, 476, 58, 18)).string = "CUT AMP";
-		liveCutAmpSlider = Slider(win, Rect(960, 478, 110, 18));
+		StaticText(win, Rect(900, 510, 58, 18)).string = "CUT AMP";
+		liveCutAmpSlider = Slider(win, Rect(960, 512, 110, 18));
 		liveCutAmpSlider.orientation = \horizontal;
 		liveCutAmpSlider.value = ~liveCutAmp.clip(0, 1);
 		liveCutAmpSlider.action = {
 			~liveCutAmp = liveCutAmpSlider.value.linlin(0, 1, 0.0, 1.5);
 		};
 
-		StaticText(win, Rect(900, 502, 58, 18)).string = "BED AMP";
-		bedAmpSlider = Slider(win, Rect(960, 504, 110, 18));
+		StaticText(win, Rect(900, 536, 58, 18)).string = "BED AMP";
+		bedAmpSlider = Slider(win, Rect(960, 538, 110, 18));
 		bedAmpSlider.orientation = \horizontal;
 		bedAmpSlider.value = ~bedAmp.clip(0, 1);
 		bedAmpSlider.action = {
 			~bedAmp = bedAmpSlider.value.linlin(0, 1, 0.0, 1.5);
 		};
 
-		StaticText(win, Rect(900, 528, 58, 18)).string = "SC SRC";
-		scCutSourceMenu = PopUpMenu(win, Rect(960, 524, 110, 24));
+		StaticText(win, Rect(900, 562, 58, 18)).string = "SC SRC";
+		scCutSourceMenu = PopUpMenu(win, Rect(960, 558, 110, 24));
 		~scCutSourceMenu = scCutSourceMenu;
 		scCutSourceMenu.items = ["material", "live", "blend"];
 		scCutSourceMenu.value = 0;
@@ -2454,37 +2555,37 @@ s.waitForBoot({
 			~setScCutSource.([\material, \live, \blend][scCutSourceMenu.value]);
 		};
 
-		StaticText(win, Rect(900, 560, 58, 18)).string = "WAIT";
-		bedWaitMinBox = NumberBox(win, Rect(960, 556, 50, 22));
+		StaticText(win, Rect(900, 594, 58, 18)).string = "WAIT";
+		bedWaitMinBox = NumberBox(win, Rect(960, 590, 50, 22));
 		bedWaitMinBox.value = ~bedMinWait;
 		bedWaitMinBox.action = { ~bedMinWait = bedWaitMinBox.value.max(0.25) };
-		bedWaitMaxBox = NumberBox(win, Rect(1020, 556, 50, 22));
+		bedWaitMaxBox = NumberBox(win, Rect(1020, 590, 50, 22));
 		bedWaitMaxBox.value = ~bedMaxWait;
 		bedWaitMaxBox.action = { ~bedMaxWait = bedWaitMaxBox.value.max(0.25) };
 
-		StaticText(win, Rect(900, 588, 58, 18)).string = "DUR";
-		bedDurMinBox = NumberBox(win, Rect(960, 584, 50, 22));
+		StaticText(win, Rect(900, 622, 58, 18)).string = "DUR";
+		bedDurMinBox = NumberBox(win, Rect(960, 618, 50, 22));
 		bedDurMinBox.value = ~bedMinDur;
 		bedDurMinBox.action = { ~bedMinDur = bedDurMinBox.value.max(1.0) };
-		bedDurMaxBox = NumberBox(win, Rect(1020, 584, 50, 22));
+		bedDurMaxBox = NumberBox(win, Rect(1020, 618, 50, 22));
 		bedDurMaxBox.value = ~bedMaxDur;
 		bedDurMaxBox.action = { ~bedMaxDur = bedDurMaxBox.value.max(1.0) };
 
-		Button(win, Rect(900, 620, 170, 32))
+		Button(win, Rect(900, 654, 170, 32))
 			.states_([["RELOAD TAPES"]])
 			.action_({
 				~sampleRoot = pathField.string;
 				~loadSamplesAsync.();
 			});
 
-		Button(win, Rect(900, 660, 170, 32))
+		Button(win, Rect(900, 694, 170, 32))
 			.states_([["REFRESH CHUNKS"]])
 			.action_({
 				~chunkSourceRoot = pathField.string;
 				~refreshChunksOnce.();
 			});
 
-		Button(win, Rect(900, 700, 170, 32))
+		Button(win, Rect(900, 734, 170, 32))
 			.states_([["STOP LOAD"]])
 			.action_({
 				~stopLoader.();
@@ -2492,7 +2593,7 @@ s.waitForBoot({
 				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount ++ " (stopped)");
 			});
 
-		Button(win, Rect(900, 740, 170, 32))
+		Button(win, Rect(900, 774, 170, 32))
 			.states_([["FREE BUFFERS"]])
 			.action_({
 				~stopLoader.();
@@ -2501,7 +2602,7 @@ s.waitForBoot({
 				~setStatus.("Buffers freed");
 			});
 
-		Button(win, Rect(900, 780, 170, 32))
+		Button(win, Rect(900, 814, 170, 32))
 			.states_([["KILL ALL"]])
 			.action_({
 				~stopLoader.();
@@ -2509,10 +2610,10 @@ s.waitForBoot({
 				~resetButtons.();
 			});
 
-		StaticText(win, Rect(20, 828, 1080, 20)).string =
+		StaticText(win, Rect(20, 862, 1080, 20)).string =
 			"Workflow: LOAD -> wait for READY -> set density / voices -> shape tape strip -> start layers or SCENE AUTO -> REC IN / REC OUT";
 
-		StaticText(win, Rect(20, 856, 1080, 20)).string =
+		StaticText(win, Rect(20, 890, 1080, 20)).string =
 			"SC SRC drives SC CUTS and BED LOOP: material, live, or blend; SC INPUT toggles live capture over loaded material.";
 
 		win.onClose = {
