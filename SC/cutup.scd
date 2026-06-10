@@ -1529,6 +1529,74 @@ s.waitForBoot({
 		~setStatus.("SC preset: " ++ preset);
 	};
 
+	~startScPerformanceCue = { |name="balanced"|
+		var raw, preset, started;
+
+		raw = name.asString.toLower;
+		~applyScPerformancePreset.(raw);
+		preset = ~scPerformancePreset;
+		started = false;
+
+		switch(
+			preset,
+			"signal-breach", {
+				if(~liveInputRecorder.isNil) {
+					started = ~startLiveInput.() or: { started };
+				};
+				started = ~startLiveCutups.() or: { started };
+				started = ~startBedLoops.() or: { started };
+				if(~buffersReady.()) {
+					started = ~startCloud.(~cloudVoices) or: { started };
+					started = ~startCuts.() or: { started };
+				};
+			},
+			"ghost-transmission", {
+				if(~liveInputRecorder.isNil) {
+					started = ~startLiveInput.() or: { started };
+				};
+				started = ~startBedLoops.() or: { started };
+				if(~buffersReady.()) {
+					started = ~startGhosts.(~ghostVoices) or: { started };
+					started = ~startCloud.(~cloudVoices) or: { started };
+				};
+			},
+			"beat-stutter", {
+				started = ~startLiveCutups.() or: { started };
+				if(~buffersReady.()) {
+					started = ~startCuts.() or: { started };
+					started = ~startLoops.(~loopVoices) or: { started };
+				};
+			},
+			"spoken-word", {
+				if(~liveInputRecorder.isNil) {
+					started = ~startLiveInput.() or: { started };
+				};
+				started = ~startLiveCutups.() or: { started };
+				if(~buffersReady.()) {
+					started = ~startGhosts.(~ghostVoices) or: { started };
+				};
+			},
+			{
+				if(~buffersReady.()) {
+					started = ~startScene.() or: { started };
+				} {
+					if(~liveInputRecorder.isNil) {
+						started = ~startLiveInput.() or: { started };
+					};
+					started = ~startLiveCutups.() or: { started };
+				};
+			}
+		);
+
+		~refreshPerformanceControls.();
+		if(started) {
+			~setStatus.("SC cue running: " ++ preset);
+		} {
+			~setStatus.("SC cue needs material or live input: " ++ preset);
+		};
+		^started;
+	};
+
 	~chooseScCutSource = {
 		var materialReady, liveReady;
 
@@ -2002,6 +2070,7 @@ s.waitForBoot({
 		}).play(SystemClock);
 
 		~setStatus.("Cuts running");
+		{ if(~cutsBtn.notNil) { ~cutsBtn.value = 1 } }.defer;
 		^true;
 	};
 
@@ -2042,6 +2111,7 @@ s.waitForBoot({
 
 		~active[\loops] = voices;
 		~setStatus.("Loops running");
+		{ if(~loopsBtn.notNil) { ~loopsBtn.value = 1 } }.defer;
 		^true;
 	};
 
@@ -2077,6 +2147,7 @@ s.waitForBoot({
 
 		~active[\ghosts] = voices;
 		~setStatus.("Ghosts running");
+		{ if(~ghostsBtn.notNil) { ~ghostsBtn.value = 1 } }.defer;
 		^true;
 	};
 
@@ -2110,6 +2181,7 @@ s.waitForBoot({
 
 		~active[\cloud] = voices;
 		~setStatus.("Cloud running");
+		{ if(~cloudBtn.notNil) { ~cloudBtn.value = 1 } }.defer;
 		^true;
 	};
 
@@ -2181,6 +2253,7 @@ s.waitForBoot({
 
 		~active[\scene] = sceneRoutine;
 		~setStatus.("Scene running");
+		{ if(~sceneBtn.notNil) { ~sceneBtn.value = 1 } }.defer;
 		^true;
 	};
 
@@ -2399,6 +2472,11 @@ s.waitForBoot({
 				~applyScPerformancePreset.(msg[1].asString);
 			};
 		}, "/cutups/scLive/preset");
+		OSCdef(\cutupsTapedeckScLiveCue, { |msg|
+			if(msg.size > 1) {
+				~startScPerformanceCue.(msg[1].asString);
+			};
+		}, "/cutups/scLive/cue");
 		OSCdef(\cutupsTapedeckScLiveBedStart, {
 			~startBedLoops.();
 		}, "/cutups/scLive/bed/start");
@@ -2447,7 +2525,7 @@ s.waitForBoot({
 				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
 			};
 		}, "/cutups/master/age");
-		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/overdub /cutups/scLive/decay /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/preset /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/overdub /cutups/scLive/decay /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/preset /cutups/scLive/cue /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
 	};
 
 	~installOSC.();
@@ -2746,6 +2824,28 @@ s.waitForBoot({
 					~setStatus.("Cloud stopped");
 				};
 			});
+
+		StaticText(win, Rect(560, 505, 260, 18)).string = "SC PERFORMANCE CUES";
+
+		Button(win, Rect(540, 532, 60, 28))
+			.states_([["BAL"]])
+			.action_({ ~startScPerformanceCue.("balanced") });
+
+		Button(win, Rect(608, 532, 60, 28))
+			.states_([["BRCH"]])
+			.action_({ ~startScPerformanceCue.("signal-breach") });
+
+		Button(win, Rect(676, 532, 60, 28))
+			.states_([["GHST"]])
+			.action_({ ~startScPerformanceCue.("ghost-transmission") });
+
+		Button(win, Rect(744, 532, 60, 28))
+			.states_([["BEAT"]])
+			.action_({ ~startScPerformanceCue.("beat-stutter") });
+
+		Button(win, Rect(812, 532, 60, 28))
+			.states_([["SPKN"]])
+			.action_({ ~startScPerformanceCue.("spoken-word") });
 
 		StaticText(win, Rect(900, 145, 58, 18)).string = "SC PRE";
 		scPresetMenu = PopUpMenu(win, Rect(960, 142, 110, 24));
