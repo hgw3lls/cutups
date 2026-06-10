@@ -346,6 +346,16 @@ python PY/cutup.py \
 
 Semi-live renders also write each source chunk to `audio_cutups/cutup_XX/chunks/` and a `cutup_XX_semi_live.json` manifest for later inspection.
 
+## SuperCollider Tape Deck
+
+Open `SC/cutup.scd` in SuperCollider after starting or completing a semi-live render. Point **SOURCE** at the variant folder, for example `out/semi_live_breach/audio_cutups/cutup_01`.
+
+- Use `LOAD LIVE` to load `cutup_XX_live_track.wav`.
+- Use `LOAD CHUNKS` to load the semi-live `chunks/` folder.
+- Use `LOAD DIR` for any plain folder of `.wav` files.
+
+Once loaded, start individual decks (`CUTS`, `LOOPS`, `GHOST`, `CLOUD`) or use `SCENE AUTO`.
+
 Each audio variant also writes `cutup_XX_plan.json`, a structured render plan with section windows, event choices, source/layer summaries, transform tags, and per-event `planner` diagnostics. Use it when comparing whether a cutup is being constructed intelligently, not just whether it sounds good. The matching `cutup_XX_events.csv` includes flat diagnostic columns for spreadsheet review.
 
 Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again.

@@ -134,6 +134,22 @@ Available preset names:
 - `hard-stutter`
 - `ghost-transmission`
 
+## SuperCollider Tape Deck
+
+`SC/cutup.scd` is a standalone SuperCollider performance companion for rendered WAV material. It can load:
+
+- a normal folder of `.wav` files with `LOAD DIR`
+- a Python semi-live `cutup_XX_live_track.wav` file or variant folder with `LOAD LIVE`
+- a Python semi-live `chunks/` folder, or its parent variant folder, with `LOAD CHUNKS`
+
+Typical bridge workflow:
+
+```bash
+cutups-live-gui
+```
+
+Render with **Semi-live track** enabled, then point `SC/cutup.scd` at `out/.../audio_cutups/cutup_01`, press `LOAD LIVE` for the growing track or `LOAD CHUNKS` for the individual chunks, then start SC layers or `SCENE AUTO`.
+
 Beat-oriented cutups can use manual grid slicing:
 
 ```bash

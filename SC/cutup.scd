@@ -1,7 +1,7 @@
 /*
 
 TRANSMISSIONS TAPE-DECK GUI
-WAV-ONLY / NON-RECURSIVE / DIRECT BUFFER LOAD
+WAV-ONLY / DIRECT BUFFER LOAD / PYTHON RENDER COMPANION
 
 FIXES
 - scans only *.wav in the selected folder
@@ -9,12 +9,13 @@ FIXES
 - direct Buffer.read for every matched file
 - READY only after buffers are actually added
 - SCENE AUTO checks real buffer count
+- can load a Python cutups live track or semi-live chunks folder
 
 USAGE
 1. Boot server
 2. Run the whole block
-3. Point TAPE ROOT to a folder containing only .wav files
-4. Press LOAD
+3. Point TAPE ROOT to a WAV folder, an audio_cutups/cutup_XX folder, or a cutup_XX_live_track.wav file
+4. Press LOAD DIR, LOAD LIVE, or LOAD CHUNKS
 5. Watch post window for:
    - SCAN PATTERN
    - WAV FILES FOUND
@@ -35,6 +36,7 @@ s.waitForBoot({
 	// ============================================================
 
 	~sampleRoot = "/Users/hgw3lls/Desktop/_TRNZ/MEDIA/auto_selected_samples/by_loop_bin";
+	~loadMode = \folder;
 
 	~buffers = List.new;
 	~sampleMeta = List.new;
@@ -239,7 +241,7 @@ s.waitForBoot({
 		};
 
 		if(~buffersReady.().not) {
-			~setStatus.("No buffers loaded — press LOAD first");
+			~setStatus.("No buffers loaded — press LOAD DIR/LIVE/CHUNKS first");
 			{ if(btn.notNil) { btn.value = 0 } }.defer;
 			^false;
 		};
@@ -248,7 +250,7 @@ s.waitForBoot({
 	};
 
 	// ============================================================
-	// WAV ONLY / NON-RECURSIVE SCAN
+	// WAV / PYTHON RENDER SCAN
 	// ============================================================
 
 	~scanWavFolder = { |root|
@@ -291,6 +293,115 @@ s.waitForBoot({
 		~setProgress.(0.2);
 
 		^files.as(List);
+	};
+
+	~variantDirFromPath = { |root|
+		var path;
+
+		path = root.asString.standardizePath;
+
+		if(File.exists(path).not) {
+			^path;
+		};
+
+		if(PathName.new(path).isFile) {
+			^PathName.new(path).pathOnly;
+		};
+
+		^path;
+	};
+
+	~scanLiveTrack = { |root|
+		var path, dir, files, pattern;
+
+		path = root.asString.standardizePath;
+
+		if(File.exists(path) and: { PathName.new(path).isFile }) {
+			~setStatus.("Live track selected");
+			~setCount.("Found: 1");
+			~setProgress.(0.2);
+			("LIVE TRACK: " ++ path).postln;
+			^[path].as(List);
+		};
+
+		dir = ~variantDirFromPath.(path);
+		pattern = dir +/+ "*_live_track.wav";
+		("LIVE TRACK PATTERN: " ++ pattern).postln;
+		files = pattern.pathMatch;
+		if(files.isNil) { files = [] };
+		files = files.asArray.sort;
+
+		if(files.isEmpty) {
+			~setStatus.("No *_live_track.wav found");
+			~setCount.("Loaded: 0");
+			~setProgress.(0);
+			^List.new;
+		};
+
+		~setStatus.("Live track found");
+		~setCount.("Found: 1");
+		~setProgress.(0.2);
+		^[files.last].as(List);
+	};
+
+	~scanChunksFolder = { |root|
+		var path, dir, chunksDir, files, pattern;
+
+		path = root.asString.standardizePath;
+
+		if(File.exists(path).not) {
+			~setStatus.("Path not found");
+			~setCount.("Loaded: 0");
+			~setProgress.(0);
+			^List.new;
+		};
+
+		if(PathName.new(path).isFile) {
+			dir = PathName.new(path).pathOnly;
+		} {
+			dir = path;
+		};
+
+		chunksDir = dir;
+		pattern = chunksDir +/+ "*.wav";
+		("CHUNKS PATTERN: " ++ pattern).postln;
+		files = pattern.pathMatch;
+		if(files.isNil) { files = [] };
+		files = files.asArray.sort;
+
+		if(files.isEmpty) {
+			chunksDir = dir +/+ "chunks";
+			pattern = chunksDir +/+ "*.wav";
+			("CHUNKS PATTERN: " ++ pattern).postln;
+			files = pattern.pathMatch;
+			if(files.isNil) { files = [] };
+			files = files.asArray.sort;
+		};
+
+		if(files.isEmpty) {
+			~setStatus.("No chunk .wav files found");
+			~setCount.("Loaded: 0");
+			~setProgress.(0);
+			^List.new;
+		};
+
+		~setStatus.("Chunks found");
+		~setCount.("Found: " ++ files.size);
+		~setProgress.(0.2);
+		^files.as(List);
+	};
+
+	~scanCurrentSource = {
+		var root;
+
+		root = ~sampleRoot.asString.standardizePath;
+
+		^switch(
+			~loadMode,
+			\live, { ~scanLiveTrack.(root) },
+			\chunks, { ~scanChunksFolder.(root) },
+			{ ~scanWavFolder.(root) }
+		);
 	};
 
 	// ============================================================
@@ -413,16 +524,16 @@ s.waitForBoot({
 		var attemptId;
 
 		~sampleRoot = ~sampleRoot.asString.standardizePath;
-		("LOAD -> " ++ ~sampleRoot).postln;
+		("LOAD -> " ++ ~sampleRoot ++ " mode=" ++ ~loadMode.asString).postln;
 
 		~stopLoader.();
 		~stopAll.();
 		~freeBuffers.();
 
-		files = ~scanWavFolder.(~sampleRoot);
+		files = ~scanCurrentSource.();
 
 		if(files.isEmpty) {
-			~setStatus.("No .wav files found");
+			~setStatus.("No usable wav files found");
 			~setCount.("Loaded: 0");
 			~setProgress.(0);
 			^nil;
@@ -914,26 +1025,43 @@ s.waitForBoot({
 		win = Window("TRANSMISSIONS TAPE-DECK — WAV DIRECT LOAD", Rect(60, 60, 1140, 680)).front;
 		win.alwaysOnTop = true;
 
-		StaticText(win, Rect(20, 15, 100, 20)).string = "TAPE ROOT";
+		StaticText(win, Rect(20, 15, 100, 20)).string = "SOURCE";
 
-		pathField = TextField(win, Rect(110, 12, 740, 24));
+		pathField = TextField(win, Rect(110, 12, 555, 24));
 		pathField.string = ~sampleRoot;
 
-		Button(win, Rect(860, 12, 80, 24))
+		Button(win, Rect(675, 12, 55, 24))
 			.states_([["SET"]])
 			.action_({
 				~sampleRoot = pathField.string;
-				~setStatus.("Path updated");
+				~setStatus.("Path set — choose LOAD DIR/LIVE/CHUNKS");
 			});
 
-		Button(win, Rect(950, 12, 70, 24))
-			.states_([["LOAD"]])
+		Button(win, Rect(740, 12, 80, 24))
+			.states_([["LOAD DIR"]])
 			.action_({
 				~sampleRoot = pathField.string;
+				~loadMode = \folder;
 				~loadSamplesAsync.();
 			});
 
-		Button(win, Rect(1030, 12, 80, 24))
+		Button(win, Rect(830, 12, 90, 24))
+			.states_([["LOAD LIVE"]])
+			.action_({
+				~sampleRoot = pathField.string;
+				~loadMode = \live;
+				~loadSamplesAsync.();
+			});
+
+		Button(win, Rect(930, 12, 105, 24))
+			.states_([["LOAD CHUNKS"]])
+			.action_({
+				~sampleRoot = pathField.string;
+				~loadMode = \chunks;
+				~loadSamplesAsync.();
+			});
+
+		Button(win, Rect(1045, 12, 65, 24))
 			.states_([["STOP"]])
 			.action_({
 				~stopAll.();
