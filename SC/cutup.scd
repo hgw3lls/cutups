@@ -1,10 +1,10 @@
 /*
 
 TRANSMISSIONS TAPE-DECK GUI
-WAV-ONLY / DIRECT BUFFER LOAD / PYTHON RENDER COMPANION
+DIRECT BUFFER LOAD / PYTHON RENDER COMPANION
 
 FIXES
-- scans only *.wav in the selected folder
+- scans supported audio files in the selected folder
 - no recursive folder walking
 - direct Buffer.read for every matched file
 - READY only after buffers are actually added
@@ -12,6 +12,9 @@ FIXES
 - can load a Python cutups live track or semi-live chunks folder
 - LOAD CHUNKS auto-refreshes newly written chunk files
 - LIVE TRACK follows the growing Python WAV on a dedicated layer
+- SC INPUT records a rolling live-input tape buffer for SuperCollider-native live cutups
+- SC CUTS can use loaded material, live input, or a blend of both
+- BED LOOPS adds long drifting tape beds from material, live input, or blend
 
 USAGE
 1. Boot server
@@ -49,6 +52,8 @@ s.waitForBoot({
 	~master = nil;
 
 	~liveGroup = nil;
+	~liveCutGroup = nil;
+	~bedGroup = nil;
 	~cutsGroup = nil;
 	~loopsGroup = nil;
 	~ghostsGroup = nil;
@@ -74,6 +79,26 @@ s.waitForBoot({
 	~liveTrackFrames = 0;
 	~liveTrackAmp = 0.65;
 	~liveTrackRefreshSec = 4.0;
+
+	~liveInputBuf = nil;
+	~liveInputRecorder = nil;
+	~liveInputStartedAt = nil;
+	~liveInputSeconds = 18.0;
+	~liveInputAmp = 1.0;
+	~liveInputMonitor = 0.0;
+	~liveInputPreLevel = 0.86;
+	~liveCutRoutine = nil;
+	~liveCutAmp = 0.55;
+	~scCutSourceMode = \material;
+
+	~bedRoutine = nil;
+	~bedAmp = 0.32;
+	~bedMinWait = 8.0;
+	~bedMaxWait = 20.0;
+	~bedMinDur = 12.0;
+	~bedMaxDur = 32.0;
+	~bedDropout = 0.035;
+	~bedReverse = false;
 
 	~density = \medium;
 
@@ -114,6 +139,11 @@ s.waitForBoot({
 	~cloudBtn = nil;
 	~sceneBtn = nil;
 	~liveBtn = nil;
+	~liveInBtn = nil;
+	~liveCutBtn = nil;
+	~bedBtn = nil;
+	~bedReverseBtn = nil;
+	~scCutSourceMenu = nil;
 
 	// ============================================================
 	// UI HELPERS
@@ -151,6 +181,9 @@ s.waitForBoot({
 			if(~cloudBtn.notNil) { ~cloudBtn.value = 0 };
 			if(~sceneBtn.notNil) { ~sceneBtn.value = 0 };
 			if(~liveBtn.notNil) { ~liveBtn.value = 0 };
+			if(~liveInBtn.notNil) { ~liveInBtn.value = 0 };
+			if(~liveCutBtn.notNil) { ~liveCutBtn.value = 0 };
+			if(~bedBtn.notNil) { ~bedBtn.value = 0 };
 		}.defer;
 	};
 
@@ -160,13 +193,17 @@ s.waitForBoot({
 
 	~makeGroups = {
 		if(~liveGroup.notNil)   { try { ~liveGroup.free } };
+		if(~liveCutGroup.notNil) { try { ~liveCutGroup.free } };
+		if(~bedGroup.notNil) { try { ~bedGroup.free } };
 		if(~cutsGroup.notNil)   { try { ~cutsGroup.free } };
 		if(~loopsGroup.notNil)  { try { ~loopsGroup.free } };
 		if(~ghostsGroup.notNil) { try { ~ghostsGroup.free } };
 		if(~cloudGroup.notNil)  { try { ~cloudGroup.free } };
 
 		~liveGroup   = Group.head(s);
-		~cutsGroup   = Group.after(~liveGroup);
+		~liveCutGroup = Group.after(~liveGroup);
+		~bedGroup    = Group.after(~liveCutGroup);
+		~cutsGroup   = Group.after(~bedGroup);
 		~loopsGroup  = Group.after(~cutsGroup);
 		~ghostsGroup = Group.after(~loopsGroup);
 		~cloudGroup  = Group.after(~ghostsGroup);
@@ -211,6 +248,37 @@ s.waitForBoot({
 		{ if(~liveBtn.notNil) { ~liveBtn.value = 0 } }.defer;
 	};
 
+	~hardStopLiveCutups = {
+		if(~liveCutRoutine.notNil) { try { ~liveCutRoutine.stop } };
+		~liveCutRoutine = nil;
+		if(~liveCutGroup.notNil) { try { ~liveCutGroup.freeAll } };
+		~active.removeAt(\liveCutups);
+		{ if(~liveCutBtn.notNil) { ~liveCutBtn.value = 0 } }.defer;
+	};
+
+	~hardStopBedLoops = {
+		if(~bedRoutine.notNil) { try { ~bedRoutine.stop } };
+		~bedRoutine = nil;
+		if(~bedGroup.notNil) { try { ~bedGroup.freeAll } };
+		~active.removeAt(\bedLoops);
+		{ if(~bedBtn.notNil) { ~bedBtn.value = 0 } }.defer;
+	};
+
+	~hardStopLiveInput = {
+		if(~liveInputRecorder.notNil) { try { ~liveInputRecorder.free } };
+		~liveInputRecorder = nil;
+		~active.removeAt(\liveInput);
+		{ if(~liveInBtn.notNil) { ~liveInBtn.value = 0 } }.defer;
+	};
+
+	~freeLiveInputBuffer = {
+		~hardStopLiveCutups.();
+		~hardStopLiveInput.();
+		if(~liveInputBuf.notNil) { try { ~liveInputBuf.free } };
+		~liveInputBuf = nil;
+		~liveInputStartedAt = nil;
+	};
+
 	~stopSceneOnly = {
 		if(~active[\scene].notNil and: { ~active[\scene].respondsTo(\stop) }) {
 			try { ~active[\scene].stop };
@@ -221,6 +289,9 @@ s.waitForBoot({
 
 	~stopLayers = {
 		~hardStopLiveTrack.();
+		~hardStopLiveCutups.();
+		~hardStopBedLoops.();
+		~hardStopLiveInput.();
 		~hardStopCuts.();
 		~hardStopLoops.();
 		~hardStopGhosts.();
@@ -243,6 +314,8 @@ s.waitForBoot({
 
 	~freeBuffers = {
 		~hardStopLiveTrack.();
+		~hardStopBedLoops.();
+		~freeLiveInputBuffer.();
 		~buffers.do { |b| try { b.free } };
 		~buffers.clear;
 		~sampleMeta.clear;
@@ -287,39 +360,70 @@ s.waitForBoot({
 	};
 
 	// ============================================================
-	// WAV / PYTHON RENDER SCAN
+	// AUDIO / PYTHON RENDER SCAN
 	// ============================================================
 
+	~isSupportedAudioPath = { |path|
+		var lower;
+
+		lower = path.asString.toLower;
+		^((lower.endsWith(".wav")) or: {
+			(lower.endsWith(".aif")) or: {
+				(lower.endsWith(".aiff")) or: {
+					lower.endsWith(".flac")
+				}
+			}
+		});
+	};
+
 	~scanWavFolder = { |root|
-		var files, normalizedRoot, pattern;
+		var files, normalizedRoot, pattern, matches;
 
 		normalizedRoot = root.asString.standardizePath;
 
 		if(File.exists(normalizedRoot).not) {
-			("Folder not found: " ++ normalizedRoot).warn;
-			~setStatus.("Folder not found");
+			("Path not found: " ++ normalizedRoot).warn;
+			~setStatus.("Path not found");
 			~setCount.("Loaded: 0");
 			~setProgress.(0);
 			^List.new;
 		};
 
-		~setStatus.("Scanning .wav folder...");
-		~setCount.("Looking for wav files...");
+		if(PathName.new(normalizedRoot).isFile) {
+			if(~isSupportedAudioPath.(normalizedRoot)) {
+				~setStatus.("Single audio file selected");
+				~setCount.("Found: 1");
+				~setProgress.(0.2);
+				("AUDIO FILE SELECTED: " ++ normalizedRoot).postln;
+				^[normalizedRoot].as(List);
+			} {
+				("Unsupported audio file: " ++ normalizedRoot).warn;
+				~setStatus.("Use wav/aif/aiff/flac");
+				~setCount.("Loaded: 0");
+				~setProgress.(0);
+				^List.new;
+			};
+		};
+
+		~setStatus.("Scanning audio folder...");
+		~setCount.("Looking for audio files...");
 		~setProgress.(0.1);
 
-		pattern = normalizedRoot +/+ "*.wav";
-		("SCAN PATTERN: " ++ pattern).postln;
-
-		files = pattern.pathMatch;
-
-		if(files.isNil) { files = [] };
-
+		files = List.new;
+		["wav", "aif", "aiff", "flac"].do { |ext|
+			pattern = normalizedRoot +/+ ("*." ++ ext);
+			("SCAN PATTERN: " ++ pattern).postln;
+			matches = pattern.pathMatch;
+			if(matches.notNil) {
+				matches.do { |path| files.add(path) };
+			};
+		};
 		files = files.asArray.sort;
 
-		("WAV FILES FOUND: " ++ files.size).postln;
+		("AUDIO FILES FOUND: " ++ files.size).postln;
 
 		if(files.isEmpty) {
-			~setStatus.("No .wav files found");
+			~setStatus.("No supported audio files found");
 			~setCount.("Loaded: 0");
 			~setProgress.(0);
 			^List.new;
@@ -766,6 +870,73 @@ s.waitForBoot({
 		Out.ar(out, sig * env * amp);
 	}).add;
 
+	SynthDef(\liveInputRecorderTape, {
+		|out=0, buf=0, inA=0, inB=1, amp=1.0, monitor=0.0, recLevel=1.0, preLevel=0.86|
+		var sig;
+
+		sig = SoundIn.ar([inA, inB]) * amp;
+		sig = LeakDC.ar(sig);
+		RecordBuf.ar(sig, buf, recLevel: recLevel, preLevel: preLevel, loop: 1);
+		Out.ar(out, sig * monitor);
+	}).add;
+
+	SynthDef(\liveInputCutTape, {
+		|out=0, buf=0, amp=0.28, rate=1.0, start=0.0, dur=0.24, pan=0.0, atk=0.004, rel=0.06, lp=9500, hp=80, revMix=0.10|
+		var frames, pos, env, sig, wet;
+
+		frames = BufFrames.kr(buf);
+		pos = start.clip(0, 0.999) * frames;
+		env = EnvGen.kr(Env.linen(atk, dur.max(0.02), rel, 1, -4), doneAction: 2);
+		sig = PlayBuf.ar(2, buf, BufRateScale.kr(buf) * rate, startPos: pos, doneAction: 0);
+		sig = LPF.ar(HPF.ar(sig, hp), lp);
+		sig = Balance2.ar(sig[0], sig[1], pan, amp) * env;
+		wet = FreeVerb2.ar(sig[0], sig[1], mix: 0.28, room: 0.84, damp: 0.32);
+		sig = XFade2.ar(sig, wet, (revMix.clip(0, 1) * 2) - 1);
+		Out.ar(out, sig);
+	}).add;
+
+	SynthDef(\bedLoopTape, {
+		|out=0, buf=0, amp=0.26, rate=1.0, loopStart=0.0, loopEnd=1.0, playDur=20.0, pan=0.0, reverse=0, dropout=0.03, wow=0.012, flutter=0.004, lp=9000, hp=55|
+		var frames, startPos, endPos, resetPos, dir, wobble, phase, env, sig, flg, noise, gate;
+
+		frames = BufFrames.kr(buf);
+		startPos = loopStart.clip(0, 0.998) * frames;
+		endPos = max(startPos + 2, loopEnd.clip(0.001, 1.0) * frames);
+		resetPos = Select.kr(reverse > 0.5, [startPos, endPos - 2]);
+		dir = Select.kr(reverse > 0.5, [1, -1]);
+		wobble = SinOsc.kr(0.17, 0, wow, 1) * SinOsc.kr(4.3, 0, flutter, 1) * LFNoise1.kr(0.05).range(0.992, 1.008);
+		phase = Phasor.ar(0, BufRateScale.kr(buf) * rate * dir * wobble, startPos, endPos, resetPos);
+		env = EnvGen.kr(Env.linen(0.35, playDur.max(0.5), 2.2, 1, -4), doneAction: 2);
+		sig = BufRd.ar(1, buf, phase, loop: 1, interpolation: 4);
+		flg = CombL.ar(sig, 0.035, SinOsc.kr(0.18).range(0.004, 0.024), 2.5);
+		noise = WhiteNoise.ar(0.006);
+		gate = Lag.kr((LFNoise1.kr(5.0) > (-1 + (dropout.clip(0, 1) * 2))).max(0), 0.05);
+		sig = ((sig * 0.82) + (flg * 0.12) + noise).tanh;
+		sig = HPF.ar(LPF.ar(sig, lp), hp) * env * gate;
+		Out.ar(out, Pan2.ar(sig * amp, pan));
+	}).add;
+
+	SynthDef(\liveBedLoopTape, {
+		|out=0, buf=0, amp=0.26, rate=1.0, loopStart=0.0, loopEnd=1.0, playDur=20.0, pan=0.0, reverse=0, dropout=0.03, wow=0.012, flutter=0.004, lp=9000, hp=55|
+		var frames, startPos, endPos, resetPos, dir, wobble, phase, env, sig, flg, noise, gate;
+
+		frames = BufFrames.kr(buf);
+		startPos = loopStart.clip(0, 0.998) * frames;
+		endPos = max(startPos + 2, loopEnd.clip(0.001, 1.0) * frames);
+		resetPos = Select.kr(reverse > 0.5, [startPos, endPos - 2]);
+		dir = Select.kr(reverse > 0.5, [1, -1]);
+		wobble = SinOsc.kr(0.14, 0, wow, 1) * SinOsc.kr(3.7, 0, flutter, 1) * LFNoise1.kr(0.04).range(0.992, 1.008);
+		phase = Phasor.ar(0, BufRateScale.kr(buf) * rate * dir * wobble, startPos, endPos, resetPos);
+		env = EnvGen.kr(Env.linen(0.35, playDur.max(0.5), 2.2, 1, -4), doneAction: 2);
+		sig = BufRd.ar(2, buf, phase, loop: 1, interpolation: 4);
+		flg = CombL.ar(sig, 0.035, SinOsc.kr(0.16).range(0.004, 0.022), 2.2);
+		noise = WhiteNoise.ar(0.005 ! 2);
+		gate = Lag.kr((LFNoise1.kr(4.5) > (-1 + (dropout.clip(0, 1) * 2))).max(0), 0.05);
+		sig = ((sig * 0.82) + (flg * 0.12) + noise).tanh;
+		sig = HPF.ar(LPF.ar(sig, lp), hp) * env * gate;
+		Out.ar(out, Balance2.ar(sig[0], sig[1], pan, amp));
+	}).add;
+
 	SynthDef(\ghostPlayerTape, {
 		|out=0, buf=0, amp=0.14, rate=(-0.5), start=0.85, pan=0, lp=3500, hp=220, rel=3.5|
 		var frames, pos, env, sig;
@@ -974,6 +1145,424 @@ s.waitForBoot({
 		~startLiveTrackRefresh.();
 		{ if(~liveBtn.notNil) { ~liveBtn.value = 1 } }.defer;
 		~setStatus.("Live track following: " ++ PathName.new(~liveTrackPath).fileName);
+		^true;
+	};
+
+	~updateLiveInputMonitor = {
+		if(~liveInputRecorder.notNil) {
+			~liveInputRecorder.set(
+				\amp, ~liveInputAmp,
+				\monitor, ~liveInputMonitor,
+				\preLevel, ~liveInputPreLevel
+			);
+		};
+	};
+
+	~ensureLiveInputBuffer = {
+		var frames;
+
+		if(~liveInputBuf.isNil) {
+			frames = (s.sampleRate * ~liveInputSeconds).asInteger.max(44100);
+			~liveInputBuf = Buffer.alloc(s, frames, 2);
+			("SC LIVE INPUT BUFFER: " ++ ~liveInputSeconds ++ " sec / " ++ frames ++ " frames").postln;
+		};
+
+		^~liveInputBuf;
+	};
+
+	~startLiveInput = {
+		var buf;
+
+		buf = ~ensureLiveInputBuffer.();
+
+		if(~liveInputRecorder.notNil) {
+			try { ~liveInputRecorder.free };
+		};
+
+		~liveInputStartedAt = Main.elapsedTime;
+		~liveInputRecorder = Synth.head(~liveGroup, \liveInputRecorderTape, [
+			\out, ~mixBus,
+			\buf, buf.bufnum,
+			\amp, ~liveInputAmp,
+			\monitor, ~liveInputMonitor,
+			\preLevel, ~liveInputPreLevel
+		]);
+		~active[\liveInput] = ~liveInputRecorder;
+		{ if(~liveInBtn.notNil) { ~liveInBtn.value = 1 } }.defer;
+		~setStatus.("SC live input recording");
+		^true;
+	};
+
+	~liveRecentStart = {
+		var elapsed, head, back;
+
+		if(~liveInputStartedAt.isNil) {
+			^rrand(0.0, 0.96);
+		};
+
+		elapsed = (Main.elapsedTime - ~liveInputStartedAt).max(0.0);
+		head = (elapsed / ~liveInputSeconds.max(1.0)).wrap(0.0, 1.0);
+		back = exprand(0.04, 0.85);
+		^(head - back).wrap(0.0, 0.999);
+	};
+
+	~setScCutSource = { |mode|
+		var raw, idx;
+
+		raw = mode.asString.toLower;
+		~scCutSourceMode = switch(
+			raw,
+			"live", { \live },
+			"blend", { \blend },
+			{ \material }
+		);
+
+		idx = [\material, \live, \blend].indexOf(~scCutSourceMode);
+		if(idx.isNil) { idx = 0 };
+		{
+			if(~scCutSourceMenu.notNil) {
+				~scCutSourceMenu.value = idx;
+			};
+		}.defer;
+		~setStatus.("SC cut source: " ++ ~scCutSourceMode.asString);
+	};
+
+	~chooseScCutSource = {
+		var materialReady, liveReady;
+
+		materialReady = ~buffersReady.();
+		liveReady = ~liveInputBuf.notNil and: { ~liveInputRecorder.notNil };
+
+		^switch(
+			~scCutSourceMode,
+			\live, {
+				if(liveReady) {
+					\live;
+				} {
+					if(materialReady) { \material } { nil };
+				};
+			},
+			\blend, {
+				if(materialReady and: { liveReady }) {
+					[\material, \live].wchoose([0.65, 0.35]);
+				} {
+					if(materialReady) {
+						\material;
+					} {
+						if(liveReady) { \live } { nil };
+					};
+				};
+			},
+			{
+				if(materialReady) {
+					\material;
+				} {
+					if(liveReady) { \live } { nil };
+				};
+			}
+		);
+	};
+
+	~fireMaterialCut = { |mode=\cut|
+		var idx, meta, sampleDur, fragDur, start, rate, pan, hp, lp, amp, revMix;
+
+		if(~buffersReady.().not) {
+			~setStatus.("Load a WAV file/folder before material SC cuts");
+			^nil;
+		};
+
+		idx = switch(
+			mode,
+			\phrase, { ~chooseIndex.(\phrase) },
+			\glitch, { ~weightedChooseIndex.(0.95) },
+			{ ~weightedChooseIndex.(0.85) }
+		);
+		if(idx.isNil) { idx = ~chooseIndex.(\any) };
+		if(idx.isNil) { ^nil };
+
+		meta = ~sampleMeta[idx];
+		sampleDur = meta[\dur].max(0.05);
+		fragDur = switch(
+			mode,
+			\glitch, { exprand(0.035, min(0.18, sampleDur.max(0.04))) },
+			\phrase, { exprand(0.40, min(2.6, sampleDur.max(0.5))) },
+			\stab, { exprand(0.06, min(0.38, sampleDur.max(0.08))) },
+			{ exprand(0.08, min(0.85, sampleDur.max(0.1))) }
+		);
+		start = rrand(0.0, max(0.0, sampleDur - fragDur));
+		rate = switch(
+			mode,
+			\glitch, { [0.5, 0.75, 1.0, 1.25, 1.6, -0.75, -1.0].choose },
+			\phrase, { [0.75, 1.0, 1.0, 1.08, -0.6].choose },
+			{ [0.5, 0.75, 1.0, 1.0, 1.25, -0.7, -1.0].choose }
+		);
+		pan = rrand(-0.95, 0.95);
+		hp = switch(mode, \phrase, { 90 }, { [80, 140, 260, 520, 900].choose });
+		lp = switch(mode, \glitch, { [1700, 2600, 4200, 7800].choose }, { [3600, 6500, 9500, 14000].choose });
+		amp = exprand(0.10, 0.38) * ~liveCutAmp;
+		revMix = switch(mode, \phrase, { 0.14 }, \glitch, { rrand(0.0, 0.28) }, { rrand(0.04, 0.22) });
+
+		Synth.head(~liveCutGroup, \cutFragTape, [
+			\out, ~mixBus,
+			\buf, ~buffers[idx].bufnum,
+			\amp, amp,
+			\rate, rate,
+			\start, start / sampleDur,
+			\pan, pan,
+			\atk, fragDur.min(0.03),
+			\rel, fragDur.max(0.03),
+			\hp, hp,
+			\lp, lp,
+			\revMix, revMix
+		]);
+	};
+
+	~fireLiveInputCut = { |mode=\cut|
+		var dur, start, rate, pan, hp, lp, amp, revMix;
+
+		if(~liveInputBuf.isNil) {
+			~setStatus.("Start SC INPUT before live cuts");
+			^nil;
+		};
+
+		dur = switch(
+			mode,
+			\glitch, { exprand(0.035, 0.16) },
+			\phrase, { exprand(0.45, 2.4) },
+			\stab, { exprand(0.07, 0.34) },
+			{ exprand(0.08, 0.75) }
+		);
+		start = ~liveRecentStart.();
+		rate = switch(
+			mode,
+			\glitch, { [0.5, 0.75, 1.0, 1.25, 1.6, -0.75, -1.0].choose },
+			\phrase, { [0.75, 1.0, 1.0, 1.08, -0.6].choose },
+			{ [0.5, 0.75, 1.0, 1.0, 1.25, -0.7, -1.0].choose }
+		);
+		pan = rrand(-0.95, 0.95);
+		hp = switch(mode, \phrase, { 90 }, { [80, 140, 260, 520, 900].choose });
+		lp = switch(mode, \glitch, { [1700, 2600, 4200, 7800].choose }, { [3600, 6500, 9500, 14000].choose });
+		amp = exprand(0.12, 0.42) * ~liveCutAmp;
+		revMix = switch(mode, \phrase, { 0.16 }, \glitch, { rrand(0.0, 0.32) }, { rrand(0.05, 0.24) });
+
+		Synth.head(~liveCutGroup, \liveInputCutTape, [
+			\out, ~mixBus,
+			\buf, ~liveInputBuf.bufnum,
+			\amp, amp,
+			\rate, rate,
+			\start, start,
+			\dur, dur,
+			\pan, pan,
+			\hp, hp,
+			\lp, lp,
+			\revMix, revMix
+		]);
+	};
+
+	~fireScCut = { |mode=\cut|
+		var source;
+
+		source = ~chooseScCutSource.();
+
+		if(source.isNil) {
+			if((~scCutSourceMode == \live) or: { ~scCutSourceMode == \blend }) {
+				~startLiveInput.();
+				source = ~chooseScCutSource.();
+			};
+		};
+
+		if(source.isNil) {
+			~setStatus.("Load material or start SC INPUT before SC CUTS");
+			^nil;
+		};
+
+		if(source == \live) {
+			~fireLiveInputCut.(mode);
+		} {
+			~fireMaterialCut.(mode);
+		};
+	};
+
+	~liveInputShot = { |mode=\stab|
+		~fireScCut.(mode);
+		~setStatus.("SC " ++ ~scCutSourceMode.asString ++ " " ++ mode.asString);
+	};
+
+	~startLiveCutups = {
+		var source;
+
+		if(((~scCutSourceMode == \live) or: { ~scCutSourceMode == \blend }) and: { ~liveInputRecorder.isNil }) {
+			~startLiveInput.();
+		};
+
+		source = ~chooseScCutSource.();
+		if(source.isNil) {
+			~setStatus.("Load material or start SC INPUT before SC CUTS");
+			{ if(~liveCutBtn.notNil) { ~liveCutBtn.value = 0 } }.defer;
+			^false;
+		};
+
+		~hardStopLiveCutups.();
+
+		~liveCutRoutine = Routine({
+			0.45.wait;
+			loop {
+				var mode, repeats;
+
+				if(~active[\liveCutups] !== thisThread) { nil.alwaysYield };
+
+				mode = [\cut, \cut, \stab, \phrase, \glitch].wchoose([5, 4, 3, 2, 3].normalizeSum);
+				if(mode == \glitch) {
+					repeats = rrand(2, 6);
+					repeats.do {
+						~fireScCut.(\glitch);
+						exprand(0.025, 0.11).wait;
+					};
+				} {
+					~fireScCut.(mode);
+				};
+
+				switch(
+					~density,
+					\sparse, { exprand(0.30, 1.2).wait },
+					\medium, { exprand(0.12, 0.55).wait },
+					\dense,  { exprand(0.035, 0.22).wait }
+				);
+			};
+		}).play(SystemClock);
+
+		~active[\liveCutups] = ~liveCutRoutine;
+		{ if(~liveCutBtn.notNil) { ~liveCutBtn.value = 1 } }.defer;
+		~setStatus.("SC " ++ ~scCutSourceMode.asString ++ " cutups running");
+		^true;
+	};
+
+	~bedWaitTime = {
+		^rrand(~bedMinWait.min(~bedMaxWait), ~bedMinWait.max(~bedMaxWait)).max(0.25);
+	};
+
+	~bedPlayTime = {
+		^rrand(~bedMinDur.min(~bedMaxDur), ~bedMinDur.max(~bedMaxDur)).max(1.0);
+	};
+
+	~setBedReverse = { |flag|
+		~bedReverse = flag.asInteger > 0;
+		{
+			if(~bedReverseBtn.notNil) {
+				~bedReverseBtn.value = ~bedReverse.binaryValue;
+			};
+		}.defer;
+		~setStatus.("Bed reverse: " ++ ~bedReverse.asString);
+	};
+
+	~fireBedLoop = {
+		var source, idx, meta, sampleDur, playDur, windowDur, windowMin, windowMax, startSec, loopStart, loopEnd, pan, rate, rev;
+
+		source = ~chooseScCutSource.();
+
+		if(source.isNil) {
+			if((~scCutSourceMode == \live) or: { ~scCutSourceMode == \blend }) {
+				~startLiveInput.();
+				source = ~chooseScCutSource.();
+			};
+		};
+
+		if(source.isNil) {
+			~setStatus.("Load material or start SC INPUT before BED LOOPS");
+			^nil;
+		};
+
+		playDur = ~bedPlayTime.();
+		pan = rrand(-0.85, 0.85);
+		rate = [0.5, 0.75, 1.0, 1.0, 1.08, 1.15].choose;
+		rev = (~bedReverse or: { 0.16.coin }).binaryValue;
+
+		if(source == \live) {
+			if(~liveInputBuf.isNil) {
+				~startLiveInput.();
+			};
+			sampleDur = ~liveInputSeconds.max(1.0);
+			windowMax = sampleDur.min(8.0).max(0.5);
+			windowMin = 1.2.min(windowMax).max(0.1);
+			windowDur = rrand(windowMin, windowMax);
+			loopStart = ~liveRecentStart.().min(1.0 - (windowDur / sampleDur).clip(0.02, 0.95)).max(0.0);
+			loopEnd = (loopStart + (windowDur / sampleDur)).clip(0.01, 1.0);
+
+			Synth.head(~bedGroup, \liveBedLoopTape, [
+				\out, ~mixBus,
+				\buf, ~liveInputBuf.bufnum,
+				\amp, ~bedAmp,
+				\rate, rate,
+				\loopStart, loopStart,
+				\loopEnd, loopEnd,
+				\playDur, playDur,
+				\pan, pan,
+				\reverse, rev,
+				\dropout, ~bedDropout
+			]);
+		} {
+			if(~buffersReady.().not) {
+				~setStatus.("Load material before material BED LOOPS");
+				^nil;
+			};
+			idx = ~chooseIndex.([\long, \phrase, \short, \any].wchoose([4, 4, 2, 1].normalizeSum));
+			if(idx.isNil) { idx = ~chooseIndex.(\any) };
+			if(idx.isNil) { ^nil };
+
+			meta = ~sampleMeta[idx];
+			sampleDur = meta[\dur].max(0.1);
+			windowMax = sampleDur.min(12.0).max(0.25);
+			windowMin = 1.5.min(windowMax).max(0.1);
+			windowDur = rrand(windowMin, windowMax);
+			startSec = rrand(0.0, (sampleDur - windowDur).max(0.0));
+			loopStart = (startSec / sampleDur).clip(0.0, 0.998);
+			loopEnd = ((startSec + windowDur) / sampleDur).clip(0.001, 1.0);
+
+			Synth.head(~bedGroup, \bedLoopTape, [
+				\out, ~mixBus,
+				\buf, ~buffers[idx].bufnum,
+				\amp, ~bedAmp,
+				\rate, rate,
+				\loopStart, loopStart,
+				\loopEnd, loopEnd,
+				\playDur, playDur,
+				\pan, pan,
+				\reverse, rev,
+				\dropout, ~bedDropout
+			]);
+		};
+	};
+
+	~startBedLoops = {
+		var source;
+
+		if((~scCutSourceMode == \live) or: { ~scCutSourceMode == \blend }) {
+			if(~liveInputRecorder.isNil) {
+				~startLiveInput.();
+			};
+		};
+
+		source = ~chooseScCutSource.();
+		if(source.isNil) {
+			~setStatus.("Load material or start SC INPUT before BED LOOPS");
+			{ if(~bedBtn.notNil) { ~bedBtn.value = 0 } }.defer;
+			^false;
+		};
+
+		~hardStopBedLoops.();
+
+		~bedRoutine = Routine({
+			0.3.wait;
+			loop {
+				if(~active[\bedLoops] !== thisThread) { nil.alwaysYield };
+				~fireBedLoop.();
+				~bedWaitTime.().wait;
+			};
+		}).play(SystemClock);
+
+		~active[\bedLoops] = ~bedRoutine;
+		{ if(~bedBtn.notNil) { ~bedBtn.value = 1 } }.defer;
+		~setStatus.("Bed loops running: " ++ ~scCutSourceMode.asString);
 		^true;
 	};
 
@@ -1375,6 +1964,73 @@ s.waitForBoot({
 				~setStatus.("Live track amp: " ++ ~liveTrackAmp.round(0.001));
 			};
 		}, "/cutups/live/amp");
+		OSCdef(\cutupsTapedeckScLiveInputStart, {
+			~startLiveInput.();
+		}, "/cutups/scLive/input/start");
+		OSCdef(\cutupsTapedeckScLiveInputStop, {
+			~hardStopLiveInput.();
+			~setStatus.("SC live input stopped");
+		}, "/cutups/scLive/input/stop");
+		OSCdef(\cutupsTapedeckScLiveCutsStart, {
+			~startLiveCutups.();
+		}, "/cutups/scLive/cuts/start");
+		OSCdef(\cutupsTapedeckScLiveCutsStop, {
+			~hardStopLiveCutups.();
+			~setStatus.("SC live cutups stopped");
+		}, "/cutups/scLive/cuts/stop");
+		OSCdef(\cutupsTapedeckScLiveStab, {
+			~liveInputShot.(\stab);
+		}, "/cutups/scLive/stab");
+		OSCdef(\cutupsTapedeckScLiveGlitch, {
+			~liveInputShot.(\glitch);
+		}, "/cutups/scLive/glitch");
+		OSCdef(\cutupsTapedeckScLiveMonitor, { |msg|
+			if(msg.size > 1) {
+				~liveInputMonitor = msg[1].asFloat.clip(0, 1.5);
+				~updateLiveInputMonitor.();
+				~setStatus.("SC input monitor: " ++ ~liveInputMonitor.round(0.001));
+			};
+		}, "/cutups/scLive/monitor");
+		OSCdef(\cutupsTapedeckScLiveCutAmp, { |msg|
+			if(msg.size > 1) {
+				~liveCutAmp = msg[1].asFloat.clip(0, 1.5);
+				~setStatus.("SC live cut amp: " ++ ~liveCutAmp.round(0.001));
+			};
+		}, "/cutups/scLive/cutAmp");
+		OSCdef(\cutupsTapedeckScLiveSource, { |msg|
+			if(msg.size > 1) {
+				~setScCutSource.(msg[1].asString);
+			};
+		}, "/cutups/scLive/source");
+		OSCdef(\cutupsTapedeckScLiveBedStart, {
+			~startBedLoops.();
+		}, "/cutups/scLive/bed/start");
+		OSCdef(\cutupsTapedeckScLiveBedStop, {
+			~hardStopBedLoops.();
+			~setStatus.("Bed loops stopped");
+		}, "/cutups/scLive/bed/stop");
+		OSCdef(\cutupsTapedeckScLiveBedReverse, { |msg|
+			if(msg.size > 1) {
+				~setBedReverse.(msg[1]);
+			} {
+				~setBedReverse.(~bedReverse.not.binaryValue);
+			};
+		}, "/cutups/scLive/bed/reverse");
+		OSCdef(\cutupsTapedeckScLiveBedAmp, { |msg|
+			if(msg.size > 1) {
+				~bedAmp = msg[1].asFloat.clip(0, 1.5);
+				~setStatus.("Bed amp: " ++ ~bedAmp.round(0.001));
+			};
+		}, "/cutups/scLive/bed/amp");
+		OSCdef(\cutupsTapedeckScLiveBedTiming, { |msg|
+			if(msg.size > 4) {
+				~bedMinWait = msg[1].asFloat.max(0.25);
+				~bedMaxWait = msg[2].asFloat.max(0.25);
+				~bedMinDur = msg[3].asFloat.max(1.0);
+				~bedMaxDur = msg[4].asFloat.max(1.0);
+				~setStatus.("Bed timing updated");
+			};
+		}, "/cutups/scLive/bed/timing");
 		OSCdef(\cutupsTapedeckMasterAge, { |msg|
 			if(msg.size > 1) {
 				~ageAmt = msg[1].asFloat.clip(0, 1);
@@ -1382,7 +2038,7 @@ s.waitForBoot({
 				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
 			};
 		}, "/cutups/master/age");
-		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/master/age".postln;
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/master/age".postln;
 	};
 
 	~installOSC.();
@@ -1397,9 +2053,11 @@ s.waitForBoot({
 		var masterSlider, driveSlider, wowSlider, flutterSlider, dropoutSlider, dirtSlider, ageSlider, dubSlider, lpSlider, hpSlider;
 		var cutsSlider, loopsSlider, ghostsSlider, cloudSlider;
 		var cutsMuteBtn, loopsMuteBtn, ghostsMuteBtn, cloudMuteBtn;
-		var liveAmpSlider;
+		var liveAmpSlider, liveInputMonitorSlider, liveCutAmpSlider, bedAmpSlider;
+		var bedWaitMinBox, bedWaitMaxBox, bedDurMinBox, bedDurMaxBox;
+		var scCutSourceMenu;
 
-		win = Window("TRANSMISSIONS TAPE-DECK — WAV DIRECT LOAD", Rect(60, 60, 1140, 680)).front;
+		win = Window("TRANSMISSIONS TAPE-DECK — DIRECT LOAD", Rect(60, 60, 1140, 900)).front;
 		win.alwaysOnTop = true;
 
 		StaticText(win, Rect(20, 15, 100, 20)).string = "SOURCE";
@@ -1717,21 +2375,116 @@ s.waitForBoot({
 			~updateLiveTrackAmp.();
 		};
 
-		Button(win, Rect(900, 335, 170, 32))
+		~liveInBtn = Button(win, Rect(900, 335, 82, 32))
+			.states_([["SC INPUT"], ["INPUT ON"]])
+			.action_({
+				if(~liveInBtn.value == 1) {
+					~startLiveInput.();
+				} {
+					~hardStopLiveInput.();
+					~setStatus.("SC live input stopped");
+				};
+			});
+
+		~liveCutBtn = Button(win, Rect(988, 335, 82, 32))
+			.states_([["SC CUTS"], ["CUTS ON"]])
+			.action_({
+				if(~liveCutBtn.value == 1) {
+					~startLiveCutups.();
+				} {
+					~hardStopLiveCutups.();
+					~setStatus.("SC live cutups stopped");
+				};
+			});
+
+		~bedBtn = Button(win, Rect(900, 375, 82, 28))
+			.states_([["BED LOOP"], ["BED ON"]])
+			.action_({
+				if(~bedBtn.value == 1) {
+					~startBedLoops.();
+				} {
+					~hardStopBedLoops.();
+					~setStatus.("Bed loops stopped");
+				};
+			});
+
+		~bedReverseBtn = Button(win, Rect(988, 375, 82, 28))
+			.states_([["BED FWD"], ["BED REV"]])
+			.action_({ ~setBedReverse.(~bedReverseBtn.value) });
+
+		Button(win, Rect(900, 411, 82, 28))
+			.states_([["LIVE STAB"]])
+			.action_({ ~liveInputShot.(\stab) });
+
+		Button(win, Rect(988, 411, 82, 28))
+			.states_([["LIVE GLCH"]])
+			.action_({ ~liveInputShot.(\glitch) });
+
+		StaticText(win, Rect(900, 450, 58, 18)).string = "IN MON";
+		liveInputMonitorSlider = Slider(win, Rect(960, 452, 110, 18));
+		liveInputMonitorSlider.orientation = \horizontal;
+		liveInputMonitorSlider.value = ~liveInputMonitor.clip(0, 1);
+		liveInputMonitorSlider.action = {
+			~liveInputMonitor = liveInputMonitorSlider.value.linlin(0, 1, 0.0, 1.5);
+			~updateLiveInputMonitor.();
+		};
+
+		StaticText(win, Rect(900, 476, 58, 18)).string = "CUT AMP";
+		liveCutAmpSlider = Slider(win, Rect(960, 478, 110, 18));
+		liveCutAmpSlider.orientation = \horizontal;
+		liveCutAmpSlider.value = ~liveCutAmp.clip(0, 1);
+		liveCutAmpSlider.action = {
+			~liveCutAmp = liveCutAmpSlider.value.linlin(0, 1, 0.0, 1.5);
+		};
+
+		StaticText(win, Rect(900, 502, 58, 18)).string = "BED AMP";
+		bedAmpSlider = Slider(win, Rect(960, 504, 110, 18));
+		bedAmpSlider.orientation = \horizontal;
+		bedAmpSlider.value = ~bedAmp.clip(0, 1);
+		bedAmpSlider.action = {
+			~bedAmp = bedAmpSlider.value.linlin(0, 1, 0.0, 1.5);
+		};
+
+		StaticText(win, Rect(900, 528, 58, 18)).string = "SC SRC";
+		scCutSourceMenu = PopUpMenu(win, Rect(960, 524, 110, 24));
+		~scCutSourceMenu = scCutSourceMenu;
+		scCutSourceMenu.items = ["material", "live", "blend"];
+		scCutSourceMenu.value = 0;
+		scCutSourceMenu.action = {
+			~setScCutSource.([\material, \live, \blend][scCutSourceMenu.value]);
+		};
+
+		StaticText(win, Rect(900, 560, 58, 18)).string = "WAIT";
+		bedWaitMinBox = NumberBox(win, Rect(960, 556, 50, 22));
+		bedWaitMinBox.value = ~bedMinWait;
+		bedWaitMinBox.action = { ~bedMinWait = bedWaitMinBox.value.max(0.25) };
+		bedWaitMaxBox = NumberBox(win, Rect(1020, 556, 50, 22));
+		bedWaitMaxBox.value = ~bedMaxWait;
+		bedWaitMaxBox.action = { ~bedMaxWait = bedWaitMaxBox.value.max(0.25) };
+
+		StaticText(win, Rect(900, 588, 58, 18)).string = "DUR";
+		bedDurMinBox = NumberBox(win, Rect(960, 584, 50, 22));
+		bedDurMinBox.value = ~bedMinDur;
+		bedDurMinBox.action = { ~bedMinDur = bedDurMinBox.value.max(1.0) };
+		bedDurMaxBox = NumberBox(win, Rect(1020, 584, 50, 22));
+		bedDurMaxBox.value = ~bedMaxDur;
+		bedDurMaxBox.action = { ~bedMaxDur = bedDurMaxBox.value.max(1.0) };
+
+		Button(win, Rect(900, 620, 170, 32))
 			.states_([["RELOAD TAPES"]])
 			.action_({
 				~sampleRoot = pathField.string;
 				~loadSamplesAsync.();
 			});
 
-		Button(win, Rect(900, 380, 170, 32))
+		Button(win, Rect(900, 660, 170, 32))
 			.states_([["REFRESH CHUNKS"]])
 			.action_({
 				~chunkSourceRoot = pathField.string;
 				~refreshChunksOnce.();
 			});
 
-		Button(win, Rect(900, 425, 170, 32))
+		Button(win, Rect(900, 700, 170, 32))
 			.states_([["STOP LOAD"]])
 			.action_({
 				~stopLoader.();
@@ -1739,7 +2492,7 @@ s.waitForBoot({
 				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount ++ " (stopped)");
 			});
 
-		Button(win, Rect(900, 470, 170, 32))
+		Button(win, Rect(900, 740, 170, 32))
 			.states_([["FREE BUFFERS"]])
 			.action_({
 				~stopLoader.();
@@ -1748,7 +2501,7 @@ s.waitForBoot({
 				~setStatus.("Buffers freed");
 			});
 
-		Button(win, Rect(900, 515, 170, 32))
+		Button(win, Rect(900, 780, 170, 32))
 			.states_([["KILL ALL"]])
 			.action_({
 				~stopLoader.();
@@ -1756,11 +2509,11 @@ s.waitForBoot({
 				~resetButtons.();
 			});
 
-		StaticText(win, Rect(20, 560, 1080, 20)).string =
+		StaticText(win, Rect(20, 828, 1080, 20)).string =
 			"Workflow: LOAD -> wait for READY -> set density / voices -> shape tape strip -> start layers or SCENE AUTO -> REC IN / REC OUT";
 
-		StaticText(win, Rect(20, 588, 1080, 20)).string =
-			"WAV-only, non-recursive, direct buffer load. Watch post window for BUFFER OK.";
+		StaticText(win, Rect(20, 856, 1080, 20)).string =
+			"SC SRC drives SC CUTS and BED LOOP: material, live, or blend; SC INPUT toggles live capture over loaded material.";
 
 		win.onClose = {
 			~stopLoader.();
@@ -1769,6 +2522,9 @@ s.waitForBoot({
 
 			if(~master.notNil)      { try { ~master.free } };
 			if(~mixBus.notNil)      { try { ~mixBus.free } };
+			if(~liveGroup.notNil)   { try { ~liveGroup.free } };
+			if(~liveCutGroup.notNil) { try { ~liveCutGroup.free } };
+			if(~bedGroup.notNil)    { try { ~bedGroup.free } };
 			if(~cutsGroup.notNil)   { try { ~cutsGroup.free } };
 			if(~loopsGroup.notNil)  { try { ~loopsGroup.free } };
 			if(~ghostsGroup.notNil) { try { ~ghostsGroup.free } };

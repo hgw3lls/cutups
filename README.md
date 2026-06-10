@@ -138,7 +138,7 @@ Available preset names:
 
 `SC/cutup.scd` is a standalone SuperCollider performance companion for rendered WAV material. It can load:
 
-- a normal folder of `.wav` files with `LOAD DIR`
+- a single `.wav`, `.aif`, `.aiff`, or `.flac` file, or a normal folder of those files, with `LOAD DIR`
 - a Python semi-live `cutup_XX_live_track.wav` file or variant folder with `LOAD LIVE`
 - a Python semi-live `chunks/` folder, or its parent variant folder, with `LOAD CHUNKS`
 
@@ -150,9 +150,9 @@ cutups-live-gui
 
 Render with **Semi-live track** enabled, then point `SC/cutup.scd` at `out/.../audio_cutups/cutup_01`, press `LOAD LIVE` for the growing track or `LOAD CHUNKS` for the individual chunks, then start SC layers or `SCENE AUTO`. `LOAD CHUNKS` keeps auto-refreshing new files written into `chunks/`, so the fragment engines can pick up fresh material while Python is still rendering.
 
-The Python GUI includes a **Send to SuperCollider** panel that sends OSC to `127.0.0.1:57120` by default. Use `Load live`, `Load chunks`, `Refresh chunks`, `Live start`, `Live stop`, `Scene on/off`, `Stab`, `Phrase`, `Concrete`, `Send age`, and `Stop all` from the same window that starts the render.
+The Python GUI includes a **Send to SuperCollider** panel that sends OSC to `127.0.0.1:57120` by default. Use `Load live`, `Load chunks`, `Refresh chunks`, `Live start`, `Live stop`, `Scene on/off`, `Stab`, `Phrase`, `Concrete`, `Send age`, and `Stop all` from the same window that starts the render. It can also control SuperCollider-native cutups with `SC input on/off`, `SC cuts on/off`, `SC stab`, `SC glitch`, source buttons for `Material`, `Live`, or `Blend`, and `Bed on/off/rev` for long tape-bed loops.
 
-The tape deck also includes performance ideas retained from older TRANSMISSIONS SuperCollider sketches: a `CNCR` concrete-cut trigger, tape `AGE` in the master strip, and OSC triggers such as `/cutups/stab`, `/cutups/phrase`, `/cutups/concrete`, `/cutups/scene`, `/cutups/stop`, `/cutups/loadLive`, `/cutups/loadChunks`, `/cutups/chunks/refresh`, `/cutups/live/start`, `/cutups/live/stop`, `/cutups/live/amp`, and `/cutups/master/age`. The dedicated `LIVE TRACK` layer continuously reloads/restarts the growing `*_live_track.wav` with a short fade instead of interrupting the fragment buffers.
+The tape deck also includes performance ideas retained from older TRANSMISSIONS SuperCollider sketches: a `CNCR` concrete-cut trigger, tape `AGE` in the master strip, and OSC triggers such as `/cutups/stab`, `/cutups/phrase`, `/cutups/concrete`, `/cutups/scene`, `/cutups/stop`, `/cutups/loadLive`, `/cutups/loadChunks`, `/cutups/chunks/refresh`, `/cutups/live/start`, `/cutups/live/stop`, `/cutups/live/amp`, `/cutups/scLive/input/start`, `/cutups/scLive/input/stop`, `/cutups/scLive/cuts/start`, `/cutups/scLive/cuts/stop`, `/cutups/scLive/stab`, `/cutups/scLive/glitch`, `/cutups/scLive/source`, `/cutups/scLive/bed/start`, `/cutups/scLive/bed/stop`, `/cutups/scLive/bed/reverse`, and `/cutups/master/age`. The dedicated `LIVE TRACK` layer continuously reloads/restarts the growing `*_live_track.wav` with a short fade instead of interrupting the fragment buffers. The `SC SRC` selector lets `SC CUTS` and `BED LOOP` use loaded material, the rolling live-input buffer, or a blend. `SC INPUT` can stay off for file/folder-only cutups, or be toggled on to add live sound into the blend. `BED LOOP` adds long drifting tape loops with reverse, dropout, wow/flutter, and wait/duration controls.
 
 Beat-oriented cutups can use manual grid slicing:
 

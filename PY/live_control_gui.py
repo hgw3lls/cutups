@@ -638,6 +638,42 @@ class ControlGUI:
     def send_sc_live_stop(self) -> None:
         self.send_sc("/cutups/live/stop")
 
+    def send_sc_native_input_start(self) -> None:
+        self.send_sc("/cutups/scLive/input/start")
+
+    def send_sc_native_input_stop(self) -> None:
+        self.send_sc("/cutups/scLive/input/stop")
+
+    def send_sc_native_cuts_start(self) -> None:
+        self.send_sc("/cutups/scLive/cuts/start")
+
+    def send_sc_native_cuts_stop(self) -> None:
+        self.send_sc("/cutups/scLive/cuts/stop")
+
+    def send_sc_native_source_material(self) -> None:
+        self.send_sc("/cutups/scLive/source", "material")
+
+    def send_sc_native_source_live(self) -> None:
+        self.send_sc("/cutups/scLive/source", "live")
+
+    def send_sc_native_source_blend(self) -> None:
+        self.send_sc("/cutups/scLive/source", "blend")
+
+    def send_sc_bed_start(self) -> None:
+        self.send_sc("/cutups/scLive/bed/start")
+
+    def send_sc_bed_stop(self) -> None:
+        self.send_sc("/cutups/scLive/bed/stop")
+
+    def send_sc_bed_reverse(self) -> None:
+        self.send_sc("/cutups/scLive/bed/reverse")
+
+    def send_sc_native_stab(self) -> None:
+        self.send_sc("/cutups/scLive/stab")
+
+    def send_sc_native_glitch(self) -> None:
+        self.send_sc("/cutups/scLive/glitch")
+
     def send_sc_stab(self) -> None:
         self.send_sc("/cutups/stab")
 
@@ -944,6 +980,25 @@ def main() -> None:
     ttk.Button(sc_row_b, text="Concrete", command=gui.send_sc_concrete).pack(side=tk.LEFT, padx=(6, 0))
     ttk.Button(sc_row_b, text="Send age", command=gui.send_sc_age).pack(side=tk.LEFT, padx=(12, 0))
     ttk.Button(sc_row_b, text="Stop all", command=gui.send_sc_stop).pack(side=tk.LEFT, padx=(6, 0))
+
+    sc_row_c = ttk.Frame(sc_frame)
+    sc_row_c.grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
+    ttk.Button(sc_row_c, text="SC input on", command=gui.send_sc_native_input_start).pack(side=tk.LEFT)
+    ttk.Button(sc_row_c, text="SC input off", command=gui.send_sc_native_input_stop).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_c, text="SC cuts on", command=gui.send_sc_native_cuts_start).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_c, text="SC cuts off", command=gui.send_sc_native_cuts_stop).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_c, text="SC stab", command=gui.send_sc_native_stab).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_c, text="SC glitch", command=gui.send_sc_native_glitch).pack(side=tk.LEFT, padx=(6, 0))
+
+    sc_row_d = ttk.Frame(sc_frame)
+    sc_row_d.grid(row=4, column=0, columnspan=6, sticky="w", pady=(6, 0))
+    ttk.Label(sc_row_d, text="SC source").pack(side=tk.LEFT)
+    ttk.Button(sc_row_d, text="Material", command=gui.send_sc_native_source_material).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(sc_row_d, text="Live", command=gui.send_sc_native_source_live).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_d, text="Blend", command=gui.send_sc_native_source_blend).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_d, text="Bed on", command=gui.send_sc_bed_start).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_d, text="Bed off", command=gui.send_sc_bed_stop).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_d, text="Bed rev", command=gui.send_sc_bed_reverse).pack(side=tk.LEFT, padx=(6, 0))
 
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(2, 10))
