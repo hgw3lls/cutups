@@ -686,6 +686,21 @@ class ControlGUI:
     def send_sc_native_glitch(self) -> None:
         self.send_sc("/cutups/scLive/glitch")
 
+    def send_sc_overdub_off(self) -> None:
+        self.send_sc("/cutups/scLive/overdub", 0.0)
+
+    def send_sc_overdub_low(self) -> None:
+        self.send_sc("/cutups/scLive/overdub", 0.18)
+
+    def send_sc_overdub_high(self) -> None:
+        self.send_sc("/cutups/scLive/overdub", 0.45)
+
+    def send_sc_decay_tight(self) -> None:
+        self.send_sc("/cutups/scLive/decay", 0.72)
+
+    def send_sc_decay_smear(self) -> None:
+        self.send_sc("/cutups/scLive/decay", 0.92)
+
     def send_sc_stab(self) -> None:
         self.send_sc("/cutups/stab")
 
@@ -1019,6 +1034,15 @@ def main() -> None:
     ttk.Button(sc_row_e, text="B", command=gui.send_sc_bed_slot_b, width=4).pack(side=tk.LEFT, padx=(6, 0))
     ttk.Button(sc_row_e, text="C", command=gui.send_sc_bed_slot_c, width=4).pack(side=tk.LEFT, padx=(6, 0))
     ttk.Button(sc_row_e, text="Clear", command=gui.send_sc_bed_slots_clear).pack(side=tk.LEFT, padx=(6, 0))
+
+    sc_row_f = ttk.Frame(sc_frame)
+    sc_row_f.grid(row=6, column=0, columnspan=6, sticky="w", pady=(6, 0))
+    ttk.Label(sc_row_f, text="Feedback").pack(side=tk.LEFT)
+    ttk.Button(sc_row_f, text="Overdub off", command=gui.send_sc_overdub_off).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(sc_row_f, text="Low", command=gui.send_sc_overdub_low, width=5).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_f, text="High", command=gui.send_sc_overdub_high, width=5).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(sc_row_f, text="Decay tight", command=gui.send_sc_decay_tight).pack(side=tk.LEFT, padx=(12, 0))
+    ttk.Button(sc_row_f, text="Decay smear", command=gui.send_sc_decay_smear).pack(side=tk.LEFT, padx=(6, 0))
 
     status = ttk.Label(frame, textvariable=status_var)
     status.pack(anchor="w", pady=(2, 10))

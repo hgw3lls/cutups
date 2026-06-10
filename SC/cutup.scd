@@ -49,6 +49,7 @@ s.waitForBoot({
 	~active = IdentityDictionary.new;
 
 	~mixBus = nil;
+	~liveOverdubBus = nil;
 	~master = nil;
 
 	~liveGroup = nil;
@@ -87,6 +88,7 @@ s.waitForBoot({
 	~liveInputAmp = 1.0;
 	~liveInputMonitor = 0.0;
 	~liveInputPreLevel = 0.86;
+	~liveOverdubSend = 0.0;
 	~liveCutRoutine = nil;
 	~liveCutAmp = 0.55;
 	~scCutSourceMode = \material;
@@ -811,7 +813,7 @@ s.waitForBoot({
 	// ============================================================
 
 	SynthDef(\cutFragTape, {
-		|out=0, buf=0, amp=0.3, rate=1.0, start=0.0, pan=0.0, atk=0.003, rel=0.08, lp=12000, hp=70, revMix=0.12|
+		|out=0, buf=0, amp=0.3, rate=1.0, start=0.0, pan=0.0, atk=0.003, rel=0.08, lp=12000, hp=70, revMix=0.12, overdubOut=0, overdubSend=0.0|
 		var frames, pos, env, sig, wet;
 
 		frames = BufFrames.kr(buf);
@@ -825,6 +827,7 @@ s.waitForBoot({
 		wet = FreeVerb2.ar(sig[0], sig[1], mix: 0.22, room: 0.8, damp: 0.35);
 		sig = XFade2.ar(sig, wet, (revMix * 2) - 1);
 		Out.ar(out, sig);
+		Out.ar(overdubOut, sig * overdubSend);
 	}).add;
 
 	SynthDef(\concreteCutTape, {
@@ -878,17 +881,19 @@ s.waitForBoot({
 	}).add;
 
 	SynthDef(\liveInputRecorderTape, {
-		|out=0, buf=0, inA=0, inB=1, amp=1.0, monitor=0.0, recLevel=1.0, preLevel=0.86|
-		var sig;
+		|out=0, buf=0, inA=0, inB=1, amp=1.0, monitor=0.0, recLevel=1.0, preLevel=0.86, overdubBus=0, overdubLevel=0.0|
+		var sig, overdub, recSig;
 
 		sig = SoundIn.ar([inA, inB]) * amp;
 		sig = LeakDC.ar(sig);
-		RecordBuf.ar(sig, buf, recLevel: recLevel, preLevel: preLevel, loop: 1);
+		overdub = InFeedback.ar(overdubBus, 2) * overdubLevel;
+		recSig = LeakDC.ar(sig + overdub);
+		RecordBuf.ar(recSig, buf, recLevel: recLevel, preLevel: preLevel, loop: 1);
 		Out.ar(out, sig * monitor);
 	}).add;
 
 	SynthDef(\liveInputCutTape, {
-		|out=0, buf=0, amp=0.28, rate=1.0, start=0.0, dur=0.24, pan=0.0, atk=0.004, rel=0.06, lp=9500, hp=80, revMix=0.10|
+		|out=0, buf=0, amp=0.28, rate=1.0, start=0.0, dur=0.24, pan=0.0, atk=0.004, rel=0.06, lp=9500, hp=80, revMix=0.10, overdubOut=0, overdubSend=0.0|
 		var frames, pos, env, sig, wet;
 
 		frames = BufFrames.kr(buf);
@@ -900,11 +905,12 @@ s.waitForBoot({
 		wet = FreeVerb2.ar(sig[0], sig[1], mix: 0.28, room: 0.84, damp: 0.32);
 		sig = XFade2.ar(sig, wet, (revMix.clip(0, 1) * 2) - 1);
 		Out.ar(out, sig);
+		Out.ar(overdubOut, sig * overdubSend);
 	}).add;
 
 	SynthDef(\bedLoopTape, {
-		|out=0, buf=0, amp=0.26, rate=1.0, loopStart=0.0, loopEnd=1.0, playDur=20.0, pan=0.0, reverse=0, dropout=0.03, wow=0.012, flutter=0.004, lp=9000, hp=55|
-		var frames, startPos, endPos, resetPos, dir, wobble, phase, env, sig, flg, noise, gate;
+		|out=0, buf=0, amp=0.26, rate=1.0, loopStart=0.0, loopEnd=1.0, playDur=20.0, pan=0.0, reverse=0, dropout=0.03, wow=0.012, flutter=0.004, lp=9000, hp=55, overdubOut=0, overdubSend=0.0|
+		var frames, startPos, endPos, resetPos, dir, wobble, phase, env, sig, flg, noise, gate, outSig;
 
 		frames = BufFrames.kr(buf);
 		startPos = loopStart.clip(0, 0.998) * frames;
@@ -920,12 +926,14 @@ s.waitForBoot({
 		gate = Lag.kr((LFNoise1.kr(5.0) > (-1 + (dropout.clip(0, 1) * 2))).max(0), 0.05);
 		sig = ((sig * 0.82) + (flg * 0.12) + noise).tanh;
 		sig = HPF.ar(LPF.ar(sig, lp), hp) * env * gate;
-		Out.ar(out, Pan2.ar(sig * amp, pan));
+		outSig = Pan2.ar(sig * amp, pan);
+		Out.ar(out, outSig);
+		Out.ar(overdubOut, outSig * overdubSend);
 	}).add;
 
 	SynthDef(\liveBedLoopTape, {
-		|out=0, buf=0, amp=0.26, rate=1.0, loopStart=0.0, loopEnd=1.0, playDur=20.0, pan=0.0, reverse=0, dropout=0.03, wow=0.012, flutter=0.004, lp=9000, hp=55|
-		var frames, startPos, endPos, resetPos, dir, wobble, phase, env, sig, flg, noise, gate;
+		|out=0, buf=0, amp=0.26, rate=1.0, loopStart=0.0, loopEnd=1.0, playDur=20.0, pan=0.0, reverse=0, dropout=0.03, wow=0.012, flutter=0.004, lp=9000, hp=55, overdubOut=0, overdubSend=0.0|
+		var frames, startPos, endPos, resetPos, dir, wobble, phase, env, sig, flg, noise, gate, outSig;
 
 		frames = BufFrames.kr(buf);
 		startPos = loopStart.clip(0, 0.998) * frames;
@@ -941,7 +949,9 @@ s.waitForBoot({
 		gate = Lag.kr((LFNoise1.kr(4.5) > (-1 + (dropout.clip(0, 1) * 2))).max(0), 0.05);
 		sig = ((sig * 0.82) + (flg * 0.12) + noise).tanh;
 		sig = HPF.ar(LPF.ar(sig, lp), hp) * env * gate;
-		Out.ar(out, Balance2.ar(sig[0], sig[1], pan, amp));
+		outSig = Balance2.ar(sig[0], sig[1], pan, amp);
+		Out.ar(out, outSig);
+		Out.ar(overdubOut, outSig * overdubSend);
 	}).add;
 
 	SynthDef(\ghostPlayerTape, {
@@ -1011,6 +1021,7 @@ s.waitForBoot({
 
 	s.bind {
 		~mixBus = Bus.audio(s, 2);
+		~liveOverdubBus = Bus.audio(s, 2);
 		~makeGroups.();
 
 		if(~master.notNil) { try { ~master.free } };
@@ -1160,7 +1171,8 @@ s.waitForBoot({
 			~liveInputRecorder.set(
 				\amp, ~liveInputAmp,
 				\monitor, ~liveInputMonitor,
-				\preLevel, ~liveInputPreLevel
+				\preLevel, ~liveInputPreLevel,
+				\overdubLevel, ~liveOverdubSend
 			);
 		};
 	};
@@ -1192,7 +1204,9 @@ s.waitForBoot({
 			\buf, buf.bufnum,
 			\amp, ~liveInputAmp,
 			\monitor, ~liveInputMonitor,
-			\preLevel, ~liveInputPreLevel
+			\preLevel, ~liveInputPreLevel,
+			\overdubBus, ~liveOverdubBus.index,
+			\overdubLevel, ~liveOverdubSend
 		]);
 		~active[\liveInput] = ~liveInputRecorder;
 		{ if(~liveInBtn.notNil) { ~liveInBtn.value = 1 } }.defer;
@@ -1320,7 +1334,9 @@ s.waitForBoot({
 			\rel, fragDur.max(0.03),
 			\hp, hp,
 			\lp, lp,
-			\revMix, revMix
+			\revMix, revMix,
+			\overdubOut, ~liveOverdubBus.index,
+			\overdubSend, ~liveOverdubSend
 		]);
 	};
 
@@ -1362,7 +1378,9 @@ s.waitForBoot({
 			\pan, pan,
 			\hp, hp,
 			\lp, lp,
-			\revMix, revMix
+			\revMix, revMix,
+			\overdubOut, ~liveOverdubBus.index,
+			\overdubSend, ~liveOverdubSend
 		]);
 	};
 
@@ -1510,7 +1528,9 @@ s.waitForBoot({
 				\playDur, playDur,
 				\pan, pan,
 				\reverse, rev,
-				\dropout, ~bedDropout
+				\dropout, ~bedDropout,
+				\overdubOut, ~liveOverdubBus.index,
+				\overdubSend, ~liveOverdubSend
 			]);
 		} {
 			if(~buffersReady.().not) {
@@ -1540,7 +1560,9 @@ s.waitForBoot({
 				\playDur, playDur,
 				\pan, pan,
 				\reverse, rev,
-				\dropout, ~bedDropout
+				\dropout, ~bedDropout,
+				\overdubOut, ~liveOverdubBus.index,
+				\overdubSend, ~liveOverdubSend
 			]);
 		};
 
@@ -2066,6 +2088,20 @@ s.waitForBoot({
 				~setStatus.("SC input monitor: " ++ ~liveInputMonitor.round(0.001));
 			};
 		}, "/cutups/scLive/monitor");
+		OSCdef(\cutupsTapedeckScLiveOverdub, { |msg|
+			if(msg.size > 1) {
+				~liveOverdubSend = msg[1].asFloat.clip(0, 1.5);
+				~updateLiveInputMonitor.();
+				~setStatus.("SC overdub send: " ++ ~liveOverdubSend.round(0.001));
+			};
+		}, "/cutups/scLive/overdub");
+		OSCdef(\cutupsTapedeckScLiveDecay, { |msg|
+			if(msg.size > 1) {
+				~liveInputPreLevel = msg[1].asFloat.clip(0, 0.995);
+				~updateLiveInputMonitor.();
+				~setStatus.("SC buffer decay: " ++ ~liveInputPreLevel.round(0.001));
+			};
+		}, "/cutups/scLive/decay");
 		OSCdef(\cutupsTapedeckScLiveCutAmp, { |msg|
 			if(msg.size > 1) {
 				~liveCutAmp = msg[1].asFloat.clip(0, 1.5);
@@ -2125,7 +2161,7 @@ s.waitForBoot({
 				~setStatus.("OSC age: " ++ ~ageAmt.round(0.001));
 			};
 		}, "/cutups/master/age");
-		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
+		"OSC ready: /cutups/stab /cutups/phrase /cutups/concrete /cutups/scene /cutups/stop /cutups/loadLive /cutups/loadChunks /cutups/chunks/refresh /cutups/live/start /cutups/live/stop /cutups/live/amp /cutups/scLive/input/start /cutups/scLive/input/stop /cutups/scLive/cuts/start /cutups/scLive/cuts/stop /cutups/scLive/stab /cutups/scLive/glitch /cutups/scLive/monitor /cutups/scLive/overdub /cutups/scLive/decay /cutups/scLive/cutAmp /cutups/scLive/source /cutups/scLive/bed/start /cutups/scLive/bed/stop /cutups/scLive/bed/reverse /cutups/scLive/bed/amp /cutups/scLive/bed/timing /cutups/scLive/bed/slot /cutups/scLive/bed/slot/clear /cutups/master/age".postln;
 	};
 
 	~installOSC.();
@@ -2140,11 +2176,11 @@ s.waitForBoot({
 		var masterSlider, driveSlider, wowSlider, flutterSlider, dropoutSlider, dirtSlider, ageSlider, dubSlider, lpSlider, hpSlider;
 		var cutsSlider, loopsSlider, ghostsSlider, cloudSlider;
 		var cutsMuteBtn, loopsMuteBtn, ghostsMuteBtn, cloudMuteBtn;
-		var liveAmpSlider, liveInputMonitorSlider, liveCutAmpSlider, bedAmpSlider;
+		var liveAmpSlider, liveInputMonitorSlider, liveOverdubSendSlider, liveDecaySlider, liveCutAmpSlider, bedAmpSlider;
 		var bedWaitMinBox, bedWaitMaxBox, bedDurMinBox, bedDurMaxBox;
 		var scCutSourceMenu;
 
-		win = Window("TRANSMISSIONS TAPE-DECK — DIRECT LOAD", Rect(60, 60, 1140, 940)).front;
+		win = Window("TRANSMISSIONS TAPE-DECK — DIRECT LOAD", Rect(60, 60, 1140, 1000)).front;
 		win.alwaysOnTop = true;
 
 		StaticText(win, Rect(20, 15, 100, 20)).string = "SOURCE";
@@ -2530,24 +2566,42 @@ s.waitForBoot({
 			~updateLiveInputMonitor.();
 		};
 
-		StaticText(win, Rect(900, 510, 58, 18)).string = "CUT AMP";
-		liveCutAmpSlider = Slider(win, Rect(960, 512, 110, 18));
+		StaticText(win, Rect(900, 510, 58, 18)).string = "ODUB";
+		liveOverdubSendSlider = Slider(win, Rect(960, 512, 110, 18));
+		liveOverdubSendSlider.orientation = \horizontal;
+		liveOverdubSendSlider.value = (~liveOverdubSend / 1.5).clip(0, 1);
+		liveOverdubSendSlider.action = {
+			~liveOverdubSend = liveOverdubSendSlider.value.linlin(0, 1, 0.0, 1.5);
+			~updateLiveInputMonitor.();
+		};
+
+		StaticText(win, Rect(900, 536, 58, 18)).string = "DECAY";
+		liveDecaySlider = Slider(win, Rect(960, 538, 110, 18));
+		liveDecaySlider.orientation = \horizontal;
+		liveDecaySlider.value = (~liveInputPreLevel / 0.995).clip(0, 1);
+		liveDecaySlider.action = {
+			~liveInputPreLevel = liveDecaySlider.value.linlin(0, 1, 0.0, 0.995);
+			~updateLiveInputMonitor.();
+		};
+
+		StaticText(win, Rect(900, 562, 58, 18)).string = "CUT AMP";
+		liveCutAmpSlider = Slider(win, Rect(960, 564, 110, 18));
 		liveCutAmpSlider.orientation = \horizontal;
 		liveCutAmpSlider.value = ~liveCutAmp.clip(0, 1);
 		liveCutAmpSlider.action = {
 			~liveCutAmp = liveCutAmpSlider.value.linlin(0, 1, 0.0, 1.5);
 		};
 
-		StaticText(win, Rect(900, 536, 58, 18)).string = "BED AMP";
-		bedAmpSlider = Slider(win, Rect(960, 538, 110, 18));
+		StaticText(win, Rect(900, 588, 58, 18)).string = "BED AMP";
+		bedAmpSlider = Slider(win, Rect(960, 590, 110, 18));
 		bedAmpSlider.orientation = \horizontal;
 		bedAmpSlider.value = ~bedAmp.clip(0, 1);
 		bedAmpSlider.action = {
 			~bedAmp = bedAmpSlider.value.linlin(0, 1, 0.0, 1.5);
 		};
 
-		StaticText(win, Rect(900, 562, 58, 18)).string = "SC SRC";
-		scCutSourceMenu = PopUpMenu(win, Rect(960, 558, 110, 24));
+		StaticText(win, Rect(900, 614, 58, 18)).string = "SC SRC";
+		scCutSourceMenu = PopUpMenu(win, Rect(960, 610, 110, 24));
 		~scCutSourceMenu = scCutSourceMenu;
 		scCutSourceMenu.items = ["material", "live", "blend"];
 		scCutSourceMenu.value = 0;
@@ -2555,37 +2609,37 @@ s.waitForBoot({
 			~setScCutSource.([\material, \live, \blend][scCutSourceMenu.value]);
 		};
 
-		StaticText(win, Rect(900, 594, 58, 18)).string = "WAIT";
-		bedWaitMinBox = NumberBox(win, Rect(960, 590, 50, 22));
+		StaticText(win, Rect(900, 646, 58, 18)).string = "WAIT";
+		bedWaitMinBox = NumberBox(win, Rect(960, 642, 50, 22));
 		bedWaitMinBox.value = ~bedMinWait;
 		bedWaitMinBox.action = { ~bedMinWait = bedWaitMinBox.value.max(0.25) };
-		bedWaitMaxBox = NumberBox(win, Rect(1020, 590, 50, 22));
+		bedWaitMaxBox = NumberBox(win, Rect(1020, 642, 50, 22));
 		bedWaitMaxBox.value = ~bedMaxWait;
 		bedWaitMaxBox.action = { ~bedMaxWait = bedWaitMaxBox.value.max(0.25) };
 
-		StaticText(win, Rect(900, 622, 58, 18)).string = "DUR";
-		bedDurMinBox = NumberBox(win, Rect(960, 618, 50, 22));
+		StaticText(win, Rect(900, 674, 58, 18)).string = "DUR";
+		bedDurMinBox = NumberBox(win, Rect(960, 670, 50, 22));
 		bedDurMinBox.value = ~bedMinDur;
 		bedDurMinBox.action = { ~bedMinDur = bedDurMinBox.value.max(1.0) };
-		bedDurMaxBox = NumberBox(win, Rect(1020, 618, 50, 22));
+		bedDurMaxBox = NumberBox(win, Rect(1020, 670, 50, 22));
 		bedDurMaxBox.value = ~bedMaxDur;
 		bedDurMaxBox.action = { ~bedMaxDur = bedDurMaxBox.value.max(1.0) };
 
-		Button(win, Rect(900, 654, 170, 32))
+		Button(win, Rect(900, 706, 170, 32))
 			.states_([["RELOAD TAPES"]])
 			.action_({
 				~sampleRoot = pathField.string;
 				~loadSamplesAsync.();
 			});
 
-		Button(win, Rect(900, 694, 170, 32))
+		Button(win, Rect(900, 746, 170, 32))
 			.states_([["REFRESH CHUNKS"]])
 			.action_({
 				~chunkSourceRoot = pathField.string;
 				~refreshChunksOnce.();
 			});
 
-		Button(win, Rect(900, 734, 170, 32))
+		Button(win, Rect(900, 786, 170, 32))
 			.states_([["STOP LOAD"]])
 			.action_({
 				~stopLoader.();
@@ -2593,7 +2647,7 @@ s.waitForBoot({
 				~setCount.("Loaded: " ++ ~loadedCount ++ " / " ++ ~loadTargetCount ++ " (stopped)");
 			});
 
-		Button(win, Rect(900, 774, 170, 32))
+		Button(win, Rect(900, 826, 170, 32))
 			.states_([["FREE BUFFERS"]])
 			.action_({
 				~stopLoader.();
@@ -2602,7 +2656,7 @@ s.waitForBoot({
 				~setStatus.("Buffers freed");
 			});
 
-		Button(win, Rect(900, 814, 170, 32))
+		Button(win, Rect(900, 866, 170, 32))
 			.states_([["KILL ALL"]])
 			.action_({
 				~stopLoader.();
@@ -2610,11 +2664,11 @@ s.waitForBoot({
 				~resetButtons.();
 			});
 
-		StaticText(win, Rect(20, 862, 1080, 20)).string =
+		StaticText(win, Rect(20, 914, 1080, 20)).string =
 			"Workflow: LOAD -> wait for READY -> set density / voices -> shape tape strip -> start layers or SCENE AUTO -> REC IN / REC OUT";
 
-		StaticText(win, Rect(20, 890, 1080, 20)).string =
-			"SC SRC drives SC CUTS and BED LOOP: material, live, or blend; SC INPUT toggles live capture over loaded material.";
+		StaticText(win, Rect(20, 942, 1080, 20)).string =
+			"SC SRC drives SC CUTS and BED LOOP; ODUB feeds SC cuts/bed back into the live buffer, DECAY controls buffer smear.";
 
 		win.onClose = {
 			~stopLoader.();
@@ -2623,6 +2677,7 @@ s.waitForBoot({
 
 			if(~master.notNil)      { try { ~master.free } };
 			if(~mixBus.notNil)      { try { ~mixBus.free } };
+			if(~liveOverdubBus.notNil) { try { ~liveOverdubBus.free } };
 			if(~liveGroup.notNil)   { try { ~liveGroup.free } };
 			if(~liveCutGroup.notNil) { try { ~liveCutGroup.free } };
 			if(~bedGroup.notNil)    { try { ~bedGroup.free } };
