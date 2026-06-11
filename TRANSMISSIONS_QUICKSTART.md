@@ -360,7 +360,14 @@ The SC deck keeps the useful parts of the older tape-loop sketches: `STAB`, `PHR
 
 Each audio variant also writes `cutup_XX_plan.json`, a structured render plan with section windows, event choices, source/layer summaries, transform tags, and per-event `planner` diagnostics. Use it when comparing whether a cutup is being constructed intelligently, not just whether it sounds good. The matching `cutup_XX_events.csv` includes flat diagnostic columns for spreadsheet review.
 
-Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again.
+Use `--analysis-cache auto` to write a versioned JSON source cache beside the render outputs. For large source folders, precompute it first:
+
+```bash
+cutups-analyze --input ./samples --output ./samples/audio_analysis_cache.json --overwrite --bpm 120 --slice-grid 1/16
+cutups --mode audio --preset beat-cutup --input ./samples --analysis-cache ./samples/audio_analysis_cache.json --overwrite --output out/beat_demo
+```
+
+Explicit cache paths are allowed, and existing files require `--overwrite`; once overwrite is allowed, matching entries are reused instead of decoded again. The renderer can also use matching non-cue cache entries during source discovery.
 
 For repeatable listening checks after changes, use [docs/MANUAL_QA.md](docs/MANUAL_QA.md).
 

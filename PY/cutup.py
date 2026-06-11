@@ -3047,11 +3047,65 @@ def run_cuttargets_mode(
 # -------------------------------------------------------------------
 
 
-def discover_samples(root: Path, exclude_paths: Optional[Iterable[Path]] = None) -> Tuple[List[SampleFile], int]:
+def sample_from_analysis_cache_entry(entry: Dict[str, object], sample_rate: int) -> Optional[SampleFile]:
+    path_text = str(entry.get("path", "") or "")
+    if not path_text:
+        return None
+    path = Path(path_text).expanduser().resolve()
+    if not path.exists() or not path.is_file() or path.suffix.lower() not in AUDIO_EXTS:
+        return None
+    if safe_int(str(entry.get("analysis_sample_rate", sample_rate)), sample_rate) != int(sample_rate):
+        return None
+    if safe_int(str(entry.get("cue_start_ms", 0)), 0) != 0:
+        return None
+    if safe_int(str(entry.get("cue_end_ms", 0)), 0) != 0:
+        return None
+    if safe_int(str(entry.get("cue_index", 0)), 0) != 0:
+        return None
+    size_bytes, mtime = audio_file_stat(path)
+    if safe_int(str(entry.get("file_size_bytes", -1)), -1) != size_bytes:
+        return None
+    if safe_int(str(entry.get("file_mtime", -1)), -1) != mtime:
+        return None
+    duration_ms = safe_int(str(entry.get("duration_ms", 0)), 0)
+    if duration_ms <= 1:
+        return None
+    return SampleFile(
+        path=path,
+        duration_ms=duration_ms,
+        words=max(0, safe_int(str(entry.get("words", 0)), 0)),
+        intensity_hint=max(0, safe_int(str(entry.get("intensity_hint", 0)), 0)),
+        loop_hint=max(0, safe_int(str(entry.get("loop_hint", 0)), 0)),
+        manifest_tags=str(entry.get("manifest_tags", "") or ""),
+        manifest_role=str(entry.get("manifest_role", "") or ""),
+        manifest_weight=clamp(safe_float(str(entry.get("manifest_weight", 1.0)), 1.0), 0.05, 20.0),
+    )
+
+
+def cached_samples_by_path(payload: Dict[str, object], sample_rate: int) -> Dict[Path, SampleFile]:
+    out: Dict[Path, SampleFile] = {}
+    for entry in cached_analysis_entries(payload).values():
+        sample = sample_from_analysis_cache_entry(entry, sample_rate)
+        if sample is not None:
+            out[sample.path.resolve()] = sample
+    return out
+
+
+def discover_samples(
+    root: Path,
+    exclude_paths: Optional[Iterable[Path]] = None,
+    analysis_cache_payload: Optional[Dict[str, object]] = None,
+    sample_rate: int = 44100,
+) -> Tuple[List[SampleFile], int]:
     ensure_audio_backend()
     samples: List[SampleFile] = []
     unreadable = 0
+    cached = cached_samples_by_path(analysis_cache_payload or {}, sample_rate)
     for path in candidate_audio_paths(root, exclude_paths=exclude_paths):
+        cached_sample = cached.get(path.resolve())
+        if cached_sample is not None:
+            samples.append(cached_sample)
+            continue
         try:
             audio = AudioSegment.from_file(path)
         except Exception:
@@ -5565,6 +5619,8 @@ def run_audio_mode(
 
     baseline_beat = load_baseline_beat(args)
     baseline_exclusions = [baseline_beat.path] if baseline_beat else None
+    analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
+    cache_payload: Dict[str, object] = load_analysis_cache(analysis_cache) if analysis_cache else {}
     if progress:
         progress.update_span(progress_span, 0.04, "audio", "discovering source audio", force=True)
 
@@ -5572,7 +5628,12 @@ def run_audio_mode(
         cue_path = Path(args.cue_file).expanduser().resolve()
         samples, unreadable = discover_cue_samples(input_root, cue_path, exclude_paths=baseline_exclusions)
     else:
-        samples, unreadable = discover_samples(input_root, exclude_paths=baseline_exclusions)
+        samples, unreadable = discover_samples(
+            input_root,
+            exclude_paths=baseline_exclusions,
+            analysis_cache_payload=cache_payload,
+            sample_rate=int(args.sample_rate),
+        )
 
     args.source_manifest_matches = 0
     if args.source_manifest:
@@ -5594,8 +5655,6 @@ def run_audio_mode(
     if progress:
         progress.update_span(progress_span, 0.10, "audio", f"loaded {len(samples)} source item(s)", force=True)
 
-    analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
-    cache_payload: Dict[str, object] = {}
     if analysis_cache:
         if progress:
             progress.update_span(progress_span, 0.12, "audio", "writing analysis cache", force=True)

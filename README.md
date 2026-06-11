@@ -97,6 +97,12 @@ cutups \
   --write-dataset-report ./samples/dataset_report.json
 ```
 
+Precompute reusable audio descriptors for faster later analysis/similarity renders:
+
+```bash
+cutups-analyze --input ./samples --output ./samples/audio_analysis_cache.json --overwrite --bpm 120 --slice-grid 1/16
+```
+
 Check local dependencies:
 
 ```bash
@@ -172,6 +178,13 @@ Write a lightweight JSON source analysis cache for later inspection or future be
 
 ```bash
 python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --bpm 120 --slice-grid 1/16 --beat-jump-mode similarity --beat-similarity-weight 0.7 --beat-novelty 0.35 --analysis-cache auto --output out/beat_demo
+```
+
+For larger folders, precompute the cache separately:
+
+```bash
+python3 PY/analyze_audio.py --input ./loops --output ./loops/audio_analysis_cache.json --overwrite --bpm 120 --slice-grid 1/16
+python3 PY/cutup.py --mode audio --preset beat-cutup --input ./loops --analysis-cache ./loops/audio_analysis_cache.json --overwrite --output out/beat_demo
 ```
 
 Spoken-word cutups can bias toward intelligibility or rupture:
@@ -438,7 +451,7 @@ When `--cue-file` is used, `cutup_XX_events.csv` includes `source_cue_start_ms`,
 
 If the requested output folder already exists and is non-empty, `cutups` writes to a numbered sibling such as `out/demo_audio_02`. Use `--overwrite` only when you intentionally want to render into an existing folder.
 
-For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. When overwrite is allowed, matching source/cue entries are reused and only stale or new entries are refreshed. The cache currently stores native lightweight descriptors from `pydub`, including RMS/loudness, zero-crossing rate, capped grid-cell summaries when beat-grid mode is active, and a compact similarity vector for beat planning. `--beat-jump-mode similarity` uses nearest-neighbor jump suggestions from the cache when available; `--beat-similarity-weight` blends those jumps with weighted random source selection, while `--beat-novelty` biases similarity jumps toward farther neighbors. Optional `librosa`/`scikit-learn` analysis is still separate.
+For explicit cache paths, `--analysis-cache ./some/path.json` refuses to overwrite an existing file unless `--overwrite` is set. When overwrite is allowed, matching source/cue entries are reused and only stale or new entries are refreshed. `cutups-analyze` writes the same cache format ahead of time, and the main renderer can use matching non-cue entries during source discovery before refreshing the cache. The cache currently stores native lightweight descriptors from `pydub`, including RMS/loudness, zero-crossing rate, capped grid-cell summaries when beat-grid mode is active, and a compact similarity vector for beat planning. `--beat-jump-mode similarity` uses nearest-neighbor jump suggestions from the cache when available; `--beat-similarity-weight` blends those jumps with weighted random source selection, while `--beat-novelty` biases similarity jumps toward farther neighbors. Optional `librosa`/`scikit-learn` analysis is still separate.
 
 ---
 

@@ -78,6 +78,22 @@ class AudioSmokeTests(unittest.TestCase):
             )
         return result
 
+    def run_analyze(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            [sys.executable, "PY/analyze_audio.py", *args],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            self.fail(
+                "analyze_audio.py failed\n"
+                f"stdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}"
+            )
+        return result
+
     def test_doctor_cli_reports_environment(self) -> None:
         result = self.run_cutup(["--doctor"])
         self.assertIn("CUTUP DOCTOR", result.stdout)
@@ -122,6 +138,39 @@ class AudioSmokeTests(unittest.TestCase):
             payload = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(payload["kind"], "cutups.dataset_report")
             self.assertEqual(payload["audio_files"], 1)
+
+    def test_analyze_audio_writes_reusable_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_tone_wav(root / "loop_a.wav", duration_s=1.0)
+            _write_tone_wav(root / "loop_b.wav", duration_s=1.2)
+            cache = root / "audio_analysis_cache.json"
+
+            result = self.run_analyze(
+                [
+                    "--input",
+                    str(root),
+                    "--output",
+                    str(cache),
+                    "--overwrite",
+                    "--bpm",
+                    "120",
+                    "--slice-grid",
+                    "1/16",
+                    "--beat-jump-mode",
+                    "similarity",
+                ]
+            )
+
+            self.assertIn("CUTUPS AUDIO ANALYSIS", result.stdout)
+            self.assertIn("samples: 2", result.stdout)
+            self.assertTrue(cache.exists())
+            payload = json.loads(cache.read_text(encoding="utf-8"))
+            self.assertEqual(payload["kind"], "cutups.audio_analysis_cache")
+            self.assertEqual(payload["version"], 8)
+            self.assertEqual(payload["grid_ms"], 125)
+            self.assertEqual(payload["beat_jump_plan"]["mode"], "similarity")
+            self.assertEqual(len(payload["samples"]), 2)
 
     def test_audio_cli_smoke_writes_master_preview_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -24,6 +24,7 @@ analysis = [
 
 [project.scripts]
 cutups = "PY.cutup:main"
+cutups-analyze = "PY.analyze_audio:main"
 cutups-live-gui = "PY.live_control_gui:main"
 cutups-live-monitor = "PY.live_control_monitor:main"
 cutups-td-bridge = "PY.live_control_td_bridge:main"

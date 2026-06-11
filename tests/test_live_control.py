@@ -22,6 +22,8 @@ def _install_pydub_stubs() -> None:
     pydub = types.ModuleType("pydub")
     pydub.AudioSegment = _DummyAudioSegment
     effects = types.ModuleType("pydub.effects")
+    generators = types.ModuleType("pydub.generators")
+    generators.WhiteNoise = object
 
     def _noop(x, *args, **kwargs):
         return x
@@ -32,6 +34,7 @@ def _install_pydub_stubs() -> None:
 
     sys.modules.setdefault("pydub", pydub)
     sys.modules.setdefault("pydub.effects", effects)
+    sys.modules.setdefault("pydub.generators", generators)
 
 
 _install_pydub_stubs()
@@ -52,6 +55,7 @@ class LiveControlTests(unittest.TestCase):
     def test_pyproject_exposes_console_scripts_and_package_data(self) -> None:
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('cutups = "PY.cutup:main"', pyproject)
+        self.assertIn('cutups-analyze = "PY.analyze_audio:main"', pyproject)
         self.assertIn('cutups-live-gui = "PY.live_control_gui:main"', pyproject)
         self.assertIn('cutups-live-monitor = "PY.live_control_monitor:main"', pyproject)
         self.assertIn('cutups-td-bridge = "PY.live_control_td_bridge:main"', pyproject)
@@ -855,6 +859,48 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(cutup.resolve_analysis_cache_path("auto", root), root / "audio_analysis_cache.json")
             explicit = root / "cache" / "sources.json"
             self.assertEqual(cutup.resolve_analysis_cache_path(str(explicit), root), explicit)
+
+    def test_discover_samples_reuses_matching_analysis_cache_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audio_path = root / "cached.wav"
+            audio_path.write_bytes(b"not actually audio")
+            size_bytes, mtime = cutup.audio_file_stat(audio_path)
+            entry = {
+                "cache_key": cutup.analysis_cache_key(str(audio_path), 0, 0, 0, 44100),
+                "path": str(audio_path),
+                "basename": audio_path.name,
+                "file_size_bytes": size_bytes,
+                "file_mtime": mtime,
+                "analysis_sample_rate": 44100,
+                "duration_ms": 1234,
+                "cue_start_ms": 0,
+                "cue_end_ms": 0,
+                "cue_index": 0,
+                "words": 2,
+                "intensity_hint": 1,
+                "loop_hint": 3,
+                "manifest_tags": "beat,loop",
+                "manifest_role": "beat",
+                "manifest_weight": 1.25,
+                "zero_crossing_rate": 0.1,
+                "grid_cell_summary": {"grid_ms": 125, "cell_count": 10, "captured": 10, "truncated": False, "cells": []},
+                "similarity_vector": {"fields": list(cutup.ANALYSIS_SIMILARITY_VECTOR_FIELDS), "values": [0.1] * 7},
+            }
+            payload = {
+                "kind": "cutups.audio_analysis_cache",
+                "version": cutup.ANALYSIS_CACHE_VERSION,
+                "sample_rate": 44100,
+                "samples": [entry],
+            }
+
+            samples, unreadable = cutup.discover_samples(root, analysis_cache_payload=payload, sample_rate=44100)
+
+            self.assertEqual(unreadable, 0)
+            self.assertEqual(len(samples), 1)
+            self.assertEqual(samples[0].duration_ms, 1234)
+            self.assertEqual(samples[0].manifest_role, "beat")
+            self.assertEqual(samples[0].manifest_tags, "beat,loop")
 
     def test_write_analysis_cache_refuses_existing_file_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as td:
