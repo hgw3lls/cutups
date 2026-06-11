@@ -546,21 +546,44 @@ class LiveControlTests(unittest.TestCase):
             baseline_beat="./beat.wav",
             semi_live=True,
             semi_live_chunk_sec="6",
+            analysis_cache="./samples/audio_analysis_cache.json",
         )
         self.assertEqual(cmd[:5], ["python", "/repo/PY/cutup.py", "--mode", "audio", "--input"])
         self.assertIn("--preset", cmd)
         self.assertIn("beat-cutup", cmd)
         self.assertIn("--baseline-beat", cmd)
         self.assertIn("./beat.wav", cmd)
+        self.assertIn("--analysis-cache", cmd)
+        self.assertIn("./samples/audio_analysis_cache.json", cmd)
+        self.assertIn("--analysis-cache-readonly", cmd)
         self.assertIn("--semi-live", cmd)
         self.assertIn("--semi-live-chunk-sec", cmd)
         self.assertIn("6", cmd)
+
+    def test_live_gui_build_analyze_command(self) -> None:
+        cmd = live_control_gui.build_analyze_command(
+            "python",
+            Path("/repo/PY/analyze_audio.py"),
+            "./loops",
+            "./loops/audio_analysis_cache.json",
+            bpm="120",
+            slice_grid="1/16",
+        )
+        self.assertEqual(cmd[:5], ["python", "/repo/PY/analyze_audio.py", "--input", "./loops", "--output"])
+        self.assertIn("./loops/audio_analysis_cache.json", cmd)
+        self.assertIn("--overwrite", cmd)
+        self.assertIn("--bpm", cmd)
+        self.assertIn("120", cmd)
+        self.assertIn("--slice-grid", cmd)
+        self.assertIn("1/16", cmd)
 
     def test_live_gui_validate_render_settings_blocks_common_launch_errors(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source = root / "source.wav"
             source.write_text("not real audio", encoding="utf-8")
+            cache = root / "audio_analysis_cache.json"
+            cache.write_text("{}", encoding="utf-8")
             self.assertIn(
                 "Grid slicing requires a BPM",
                 live_control_gui.validate_render_settings(str(source), "30", "", "1/16", "", True, "8", root),
@@ -577,8 +600,41 @@ class LiveControlTests(unittest.TestCase):
                 "Input does not exist",
                 live_control_gui.validate_render_settings(str(root / "missing.wav"), "30", "120", "off", "", False, "8", root),
             )
+            self.assertIn(
+                "Analysis cache not found",
+                live_control_gui.validate_render_settings(str(source), "30", "120", "off", "", False, "8", root, analysis_cache=str(root / "missing.json")),
+            )
+            self.assertEqual(
+                "",
+                live_control_gui.validate_render_settings(str(source), "30", "120", "off", "", False, "8", root, analysis_cache=str(cache)),
+            )
             self.assertEqual(root / "relative.wav", live_control_gui.resolve_render_path("relative.wav", root))
             self.assertEqual(source, live_control_gui.resolve_render_path(str(source), root))
+            self.assertEqual(cache, live_control_gui.default_analysis_cache_path(str(root), root))
+
+    def test_live_gui_validate_analysis_settings_blocks_bad_grid_and_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.wav"
+            source.write_text("not real audio", encoding="utf-8")
+            self.assertIn(
+                "Grid analysis requires a BPM",
+                live_control_gui.validate_analysis_settings(str(source), str(root / "cache.json"), "", "1/16", root),
+            )
+            self.assertIn(
+                "Analysis cache path is a folder",
+                live_control_gui.validate_analysis_settings(str(source), str(root), "120", "off", root),
+            )
+            self.assertEqual(
+                "",
+                live_control_gui.validate_analysis_settings(str(source), str(root / "cache.json"), "120", "1/16", root),
+            )
+
+    def test_cutup_analysis_cache_readonly_cli_flag(self) -> None:
+        with mock.patch.object(sys, "argv", ["cutup.py", "--analysis-cache", "cache.json", "--analysis-cache-readonly"]):
+            args = cutup.parse_args()
+        self.assertEqual(args.analysis_cache, "cache.json")
+        self.assertTrue(args.analysis_cache_readonly)
 
     def test_apply_runtime_params_updates_signal_damage_controls(self) -> None:
         args = types.SimpleNamespace(

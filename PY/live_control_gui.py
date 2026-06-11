@@ -83,6 +83,10 @@ def cutup_script_path() -> Path:
     return Path(__file__).resolve().with_name("cutup.py")
 
 
+def analyze_script_path() -> Path:
+    return Path(__file__).resolve().with_name("analyze_audio.py")
+
+
 def open_with_system(path: Path) -> None:
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(path)])
@@ -138,6 +142,7 @@ def build_render_command(
     baseline_beat: str = "",
     semi_live: bool = False,
     semi_live_chunk_sec: str = "8",
+    analysis_cache: str = "",
 ) -> List[str]:
     cmd = [
         python_executable,
@@ -167,8 +172,34 @@ def build_render_command(
         cmd.extend(["--slice-grid", slice_grid])
     if baseline_beat.strip():
         cmd.extend(["--baseline-beat", baseline_beat.strip()])
+    if analysis_cache.strip():
+        cmd.extend(["--analysis-cache", analysis_cache.strip(), "--analysis-cache-readonly"])
     if semi_live:
         cmd.extend(["--semi-live", "--semi-live-chunk-sec", semi_live_chunk_sec.strip() or "8"])
+    return cmd
+
+
+def build_analyze_command(
+    python_executable: str,
+    script_path: Path,
+    input_path: str,
+    output_path: str,
+    bpm: str = "",
+    slice_grid: str = "off",
+) -> List[str]:
+    cmd = [
+        python_executable,
+        str(script_path),
+        "--input",
+        input_path,
+        "--output",
+        output_path,
+        "--overwrite",
+    ]
+    if bpm.strip() and bpm.strip() not in {"0", "0.0"}:
+        cmd.extend(["--bpm", bpm.strip()])
+    if slice_grid and slice_grid != "off":
+        cmd.extend(["--slice-grid", slice_grid])
     return cmd
 
 
@@ -177,6 +208,44 @@ def resolve_render_path(raw: str, base_dir: Path) -> Path:
     if path.is_absolute():
         return path
     return base_dir / path
+
+
+def default_analysis_cache_path(input_path: str, base_dir: Path) -> Path:
+    resolved = resolve_render_path(input_path.strip() or "./samples", base_dir)
+    if resolved.is_dir():
+        return resolved / "audio_analysis_cache.json"
+    return resolved.with_name(f"{resolved.stem}_audio_analysis_cache.json")
+
+
+def validate_analysis_settings(
+    input_path: str,
+    output_path: str,
+    bpm: str,
+    slice_grid: str,
+    base_dir: Path,
+) -> str:
+    resolved_input = resolve_render_path(input_path.strip() or "./samples", base_dir)
+    if not resolved_input.exists():
+        return f"Input does not exist: {resolved_input}"
+    resolved_output = resolve_render_path(output_path.strip(), base_dir)
+    if resolved_output.exists() and resolved_output.is_dir():
+        return f"Analysis cache path is a folder: {resolved_output}"
+    grid = (slice_grid or "off").strip()
+    bpm_value = (bpm or "").strip()
+    if grid and grid != "off":
+        try:
+            parsed_bpm = float(bpm_value)
+        except ValueError:
+            return "Grid analysis requires a BPM. Enter BPM or set Grid to off."
+        if parsed_bpm <= 0:
+            return "Grid analysis requires a BPM. Enter BPM or set Grid to off."
+    elif bpm_value:
+        try:
+            if float(bpm_value) <= 0:
+                return "BPM must be greater than 0."
+        except ValueError:
+            return "BPM must be a number."
+    return ""
 
 
 def validate_render_settings(
@@ -188,6 +257,7 @@ def validate_render_settings(
     semi_live: bool,
     semi_live_chunk_sec: str,
     base_dir: Path,
+    analysis_cache: str = "",
 ) -> str:
     resolved_input = resolve_render_path(input_path.strip() or "./samples", base_dir)
     if not resolved_input.exists():
@@ -215,6 +285,13 @@ def validate_render_settings(
     baseline_value = baseline_beat.strip()
     if baseline_value and not resolve_render_path(baseline_value, base_dir).exists():
         return f"Baseline does not exist: {resolve_render_path(baseline_value, base_dir)}"
+    cache_value = analysis_cache.strip()
+    if cache_value and cache_value.lower() != "auto":
+        cache_path = resolve_render_path(cache_value, base_dir)
+        if cache_path.exists() and cache_path.is_dir():
+            return f"Analysis cache path is a folder: {cache_path}"
+        if not cache_path.exists():
+            return f"Analysis cache not found: {cache_path}. Run Analyze sources or clear cache."
     if semi_live:
         try:
             if float(semi_live_chunk_sec.strip() or "8") < 1.0:
@@ -402,6 +479,7 @@ class ControlGUI:
     bpm_var: tk.StringVar
     slice_grid_var: tk.StringVar
     baseline_var: tk.StringVar
+    analysis_cache_var: tk.StringVar
     semi_live_var: tk.BooleanVar
     chunk_sec_var: tk.StringVar
     track_path_var: tk.StringVar
@@ -421,6 +499,9 @@ class ControlGUI:
     render_process: Optional[subprocess.Popen] = None
     render_log_handle: Any = None
     render_log_path: Optional[Path] = None
+    analysis_process: Optional[subprocess.Popen] = None
+    analysis_log_handle: Any = None
+    analysis_log_path: Optional[Path] = None
 
     @staticmethod
     def _atomic_write(path: Path, text: str) -> None:
@@ -501,6 +582,25 @@ class ControlGUI:
             baseline_beat=self.baseline_var.get().strip(),
             semi_live=bool(self.semi_live_var.get()),
             semi_live_chunk_sec=self.chunk_sec_var.get().strip() or "8",
+            analysis_cache=self.analysis_cache_var.get().strip(),
+        )
+
+    def current_analysis_cache_path(self) -> Path:
+        base_dir = cutup_script_path().parents[1]
+        raw = self.analysis_cache_var.get().strip()
+        if not raw or raw.lower() == "auto":
+            return default_analysis_cache_path(self.input_var.get().strip() or "./samples", base_dir)
+        return resolve_render_path(raw, base_dir)
+
+    def current_analyze_command(self) -> List[str]:
+        cache_path = self.current_analysis_cache_path()
+        return build_analyze_command(
+            sys.executable,
+            analyze_script_path(),
+            self.input_var.get().strip() or "./samples",
+            str(cache_path),
+            bpm=self.bpm_var.get().strip(),
+            slice_grid=self.slice_grid_var.get().strip() or "off",
         )
 
     def update_command_preview(self, *_: object) -> None:
@@ -523,6 +623,7 @@ class ControlGUI:
             bool(self.semi_live_var.get()),
             self.chunk_sec_var.get(),
             cutup_script_path().parents[1],
+            analysis_cache=self.analysis_cache_var.get(),
         )
 
     def update_launch_check(self) -> None:
@@ -548,6 +649,21 @@ class ControlGUI:
         chosen = filedialog.askopenfilename(title="Choose baseline beat", filetypes=[("Audio files", "*.wav *.mp3 *.flac *.aiff *.ogg *.m4a"), ("All files", "*.*")])
         if chosen:
             self.baseline_var.set(chosen)
+
+    def set_analysis_cache_auto(self) -> None:
+        self.analysis_cache_var.set(str(self.current_analysis_cache_path()))
+
+    def choose_analysis_cache(self) -> None:
+        chosen = filedialog.asksaveasfilename(
+            title="Choose analysis cache",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if chosen:
+            self.analysis_cache_var.set(chosen)
+
+    def clear_analysis_cache(self) -> None:
+        self.analysis_cache_var.set("")
 
     def open_track(self) -> None:
         raw = self.track_path_var.get().strip()
@@ -589,6 +705,76 @@ class ControlGUI:
         self.root.clipboard_clear()
         self.root.clipboard_append(command)
         self.status_var.set("Copied render command")
+
+    def log_tail(self, path: Optional[Path], max_lines: int = 6) -> str:
+        if not path or not path.exists():
+            return ""
+        try:
+            lines = [line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+        except OSError:
+            return ""
+        return " | ".join(lines[-max_lines:])
+
+    def start_analysis(self) -> None:
+        if self.analysis_process and self.analysis_process.poll() is None:
+            self.status_var.set("Analysis already running")
+            return
+        render_cwd = cutup_script_path().parents[1]
+        cache_path = self.current_analysis_cache_path()
+        if not self.analysis_cache_var.get().strip():
+            self.analysis_cache_var.set(str(cache_path))
+        validation_error = validate_analysis_settings(
+            self.input_var.get(),
+            str(cache_path),
+            self.bpm_var.get(),
+            self.slice_grid_var.get(),
+            render_cwd,
+        )
+        if validation_error:
+            self.status_var.set(validation_error)
+            self.progress_detail_var.set(validation_error)
+            return
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path = cache_path.with_suffix(".log")
+        self.analysis_log_path = log_path
+        self.analysis_log_handle = log_path.open("w", encoding="utf-8")
+        cmd = self.current_analyze_command()
+        try:
+            self.analysis_process = subprocess.Popen(
+                cmd,
+                cwd=str(render_cwd),
+                stdout=self.analysis_log_handle,
+                stderr=subprocess.STDOUT,
+            )
+        except OSError as exc:
+            self.analysis_log_handle.close()
+            self.analysis_log_handle = None
+            self.status_var.set(f"Analysis failed to start: {exc}")
+            return
+        self.status_var.set(f"Analysis running. Log: {log_path}")
+        self.progress_detail_var.set(f"Analysis cache: {cache_path}")
+        self.root.after(500, self.poll_analysis)
+
+    def poll_analysis(self) -> None:
+        if not self.analysis_process:
+            return
+        code = self.analysis_process.poll()
+        if code is None:
+            self.root.after(500, self.poll_analysis)
+            return
+        if self.analysis_log_handle:
+            self.analysis_log_handle.close()
+            self.analysis_log_handle = None
+        cache_path = self.current_analysis_cache_path()
+        if code == 0:
+            self.status_var.set(f"Analysis cache ready: {cache_path}")
+            self.progress_detail_var.set(f"Analysis cache ready: {cache_path}")
+            self.update_command_preview()
+        else:
+            tail = self.log_tail(self.analysis_log_path)
+            message = f"Analysis failed with code {code}: {tail}" if tail else f"Analysis exited with code {code}"
+            self.status_var.set(message)
+            self.progress_detail_var.set(message)
 
     def sc_variant_path(self) -> Path:
         track_raw = self.track_path_var.get().strip()
@@ -758,13 +944,7 @@ class ControlGUI:
         self.send_sc("/cutups/master/age", max(0.0, min(1.0, age)))
 
     def render_log_tail(self, max_lines: int = 6) -> str:
-        if not self.render_log_path or not self.render_log_path.exists():
-            return ""
-        try:
-            lines = [line.strip() for line in self.render_log_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
-        except OSError:
-            return ""
-        return " | ".join(lines[-max_lines:])
+        return self.log_tail(self.render_log_path, max_lines=max_lines)
 
     def start_render(self) -> None:
         if self.render_process and self.render_process.poll() is None:
@@ -887,6 +1067,7 @@ def main() -> None:
     bpm_var = tk.StringVar(value="")
     slice_grid_var = tk.StringVar(value="off")
     baseline_var = tk.StringVar(value="")
+    analysis_cache_var = tk.StringVar(value="")
     semi_live_var = tk.BooleanVar(value=True)
     chunk_sec_var = tk.StringVar(value="8")
     track_path_var = tk.StringVar(value="Waiting for first chunk")
@@ -937,6 +1118,7 @@ def main() -> None:
         bpm_var=bpm_var,
         slice_grid_var=slice_grid_var,
         baseline_var=baseline_var,
+        analysis_cache_var=analysis_cache_var,
         semi_live_var=semi_live_var,
         chunk_sec_var=chunk_sec_var,
         track_path_var=track_path_var,
@@ -987,25 +1169,34 @@ def main() -> None:
     ttk.Button(render_frame, text="Choose", command=gui.choose_baseline).grid(row=3, column=2, sticky="e", pady=(6, 0))
     render_frame.columnconfigure(1, weight=1)
 
+    ttk.Label(render_frame, text="Analysis cache").grid(row=4, column=0, sticky="w", pady=(6, 0))
+    ttk.Entry(render_frame, textvariable=analysis_cache_var).grid(row=4, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
+    analysis_buttons = ttk.Frame(render_frame)
+    analysis_buttons.grid(row=4, column=2, sticky="e", pady=(6, 0))
+    ttk.Button(analysis_buttons, text="Auto", command=gui.set_analysis_cache_auto).pack(side=tk.LEFT)
+    ttk.Button(analysis_buttons, text="Choose", command=gui.choose_analysis_cache).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(analysis_buttons, text="Analyze", command=gui.start_analysis).pack(side=tk.LEFT, padx=(6, 0))
+    ttk.Button(analysis_buttons, text="Clear", command=gui.clear_analysis_cache).pack(side=tk.LEFT, padx=(6, 0))
+
     semi_live_row = ttk.Frame(render_frame)
-    semi_live_row.grid(row=4, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    semi_live_row.grid(row=5, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
     ttk.Checkbutton(semi_live_row, text="Semi-live track", variable=semi_live_var, command=gui.update_command_preview).pack(side=tk.LEFT)
     ttk.Label(semi_live_row, text="Chunk sec").pack(side=tk.LEFT, padx=(16, 4))
     ttk.Entry(semi_live_row, textvariable=chunk_sec_var, width=8).pack(side=tk.LEFT)
 
-    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=5, column=0, sticky="nw", pady=(8, 0))
+    ttk.Label(render_frame, text="Command", font=("TkDefaultFont", 10, "bold")).grid(row=6, column=0, sticky="nw", pady=(8, 0))
     command_box = tk.Text(render_frame, height=3, wrap="word")
     gui.command_box = command_box
-    command_box.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
+    command_box.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
     command_box.configure(state="disabled")
 
     launch_row = ttk.Frame(render_frame)
-    launch_row.grid(row=6, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
+    launch_row.grid(row=7, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 0))
     ttk.Button(launch_row, text="Start render", command=gui.start_render).pack(side=tk.LEFT)
     ttk.Button(launch_row, text="Stop", command=gui.stop_render).pack(side=tk.LEFT, padx=(8, 0))
     ttk.Button(launch_row, text="Copy command", command=gui.copy_command).pack(side=tk.LEFT, padx=(8, 0))
     ttk.Button(launch_row, text="Open log", command=gui.open_log).pack(side=tk.LEFT, padx=(8, 0))
-    ttk.Label(render_frame, textvariable=validation_var).grid(row=7, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(4, 0))
+    ttk.Label(render_frame, textvariable=validation_var).grid(row=8, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(4, 0))
 
     progress_frame = ttk.LabelFrame(render_tab, text="Render progress / playable track", padding=8)
     progress_frame.pack(fill=tk.X, pady=(8, 8))
@@ -1166,7 +1357,7 @@ def main() -> None:
 
     preset_combo.bind("<<ComboboxSelected>>", lambda _e: gui.apply_preset(preset_var.get()))
     sec_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
-    for var in (input_var, output_var, preset_var, duration_var, bpm_var, slice_grid_var, baseline_var, chunk_sec_var):
+    for var in (input_var, output_var, preset_var, duration_var, bpm_var, slice_grid_var, baseline_var, analysis_cache_var, chunk_sec_var):
         var.trace_add("write", gui.update_command_preview)
 
     gui.write_payload()

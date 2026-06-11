@@ -991,6 +991,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--semi-live-chunk-sec", type=float, default=8.0, help="Chunk length in seconds for --semi-live audio rendering.")
     p.add_argument("--semi-live-track", default="", help="Optional output path for the updating semi-live WAV track. Defaults inside each variant folder.")
     p.add_argument("--analysis-cache", default="", help="Write/update a lightweight JSON source analysis cache for audio mode. Use 'auto' for output/audio_analysis_cache.json.")
+    p.add_argument("--analysis-cache-readonly", action="store_true", help="Use an existing analysis cache for source discovery/planning without updating it during render.")
 
     p.add_argument("--input", help="Audio sample file or folder (required for audio/both/all).")
     p.add_argument("--cue-file", default="", help="Optional SRT or CSV cue file for phrase-aware audio slicing.")
@@ -2161,6 +2162,8 @@ def print_dry_run(args: argparse.Namespace, output_root: Path) -> None:
         print(f"semi_live_track: {Path(args.semi_live_track).expanduser().resolve() if args.semi_live_track else 'auto'}")
     analysis_cache = resolve_analysis_cache_path(args.analysis_cache, output_root)
     print(f"analysis_cache: {analysis_cache if analysis_cache else 'off'}")
+    if analysis_cache:
+        print(f"analysis_cache_mode: {'readonly' if getattr(args, 'analysis_cache_readonly', False) else 'update'}")
     print(f"source_manifest: {Path(args.source_manifest).expanduser().resolve() if args.source_manifest else 'off'}")
     print(f"variants: {args.variants}")
     print(f"density: {args.density}")
@@ -5655,7 +5658,12 @@ def run_audio_mode(
     if progress:
         progress.update_span(progress_span, 0.10, "audio", f"loaded {len(samples)} source item(s)", force=True)
 
-    if analysis_cache:
+    if analysis_cache and getattr(args, "analysis_cache_readonly", False):
+        if not cache_payload:
+            print(f"Warning: analysis cache not readable; continuing without cached descriptors: {analysis_cache}")
+        elif progress:
+            progress.update_span(progress_span, 0.12, "audio", "using readonly analysis cache", force=True)
+    elif analysis_cache:
         if progress:
             progress.update_span(progress_span, 0.12, "audio", "writing analysis cache", force=True)
         cache_path = write_analysis_cache(analysis_cache, samples, args, input_root)
