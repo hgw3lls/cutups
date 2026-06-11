@@ -3739,7 +3739,13 @@ def analysis_entry_for_sample(sample: SampleFile, args: argparse.Namespace, inde
     return entry
 
 
-def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.Namespace, input_root: Path) -> Path:
+def write_analysis_cache(
+    path: Path,
+    samples: List[SampleFile],
+    args: argparse.Namespace,
+    input_root: Path,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Path:
     if path.exists() and path.is_dir():
         raise SystemExit(f"--analysis-cache path is a directory: {path}")
     if path.exists() and not args.overwrite:
@@ -3754,9 +3760,11 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
     errors: List[Dict[str, str]] = []
     reused = 0
     refreshed = 0
+    total = len(samples)
     for index, sample in enumerate(samples, start=1):
         cache_key = analysis_cache_key_for_sample(sample, args)
         cached = existing_entries.get(cache_key)
+        state = "refreshed"
         if cached and cached_entry_matches_sample(cached, sample, args):
             entry = dict(cached)
             entry["index"] = index
@@ -3764,12 +3772,16 @@ def write_analysis_cache(path: Path, samples: List[SampleFile], args: argparse.N
             entry["cache_state"] = "reused"
             entries.append(entry)
             reused += 1
-            continue
-        try:
-            entries.append(analysis_entry_for_sample(sample, args, index))
-            refreshed += 1
-        except Exception as exc:
-            errors.append({"path": str(sample.path), "error": str(exc)})
+            state = "reused"
+        else:
+            try:
+                entries.append(analysis_entry_for_sample(sample, args, index))
+                refreshed += 1
+            except Exception as exc:
+                errors.append({"path": str(sample.path), "error": str(exc)})
+                state = "error"
+        if progress_callback:
+            progress_callback(index, total, state)
 
     payload = {
         "version": ANALYSIS_CACHE_VERSION,

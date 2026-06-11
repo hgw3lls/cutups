@@ -186,6 +186,7 @@ def build_analyze_command(
     output_path: str,
     bpm: str = "",
     slice_grid: str = "off",
+    progress_jsonl: str = "",
 ) -> List[str]:
     cmd = [
         python_executable,
@@ -200,6 +201,8 @@ def build_analyze_command(
         cmd.extend(["--bpm", bpm.strip()])
     if slice_grid and slice_grid != "off":
         cmd.extend(["--slice-grid", slice_grid])
+    if progress_jsonl.strip():
+        cmd.extend(["--progress-jsonl", progress_jsonl.strip(), "--no-progress"])
     return cmd
 
 
@@ -502,6 +505,8 @@ class ControlGUI:
     analysis_process: Optional[subprocess.Popen] = None
     analysis_log_handle: Any = None
     analysis_log_path: Optional[Path] = None
+    analysis_telemetry_file: Optional[Path] = None
+    analysis_telemetry_pos: int = 0
 
     @staticmethod
     def _atomic_write(path: Path, text: str) -> None:
@@ -528,6 +533,25 @@ class ControlGUI:
         self.last_payload = controls
         self.status_var.set(f"Wrote: {self.control_file}")
 
+    def apply_telemetry_row(self, row: Dict[str, object]) -> None:
+        if row.get("where") == "progress":
+            percent = row.get("percent", 0.0)
+            if isinstance(percent, (int, float)):
+                self.progress_var.set(max(0.0, min(100.0, float(percent))))
+            stage = str(row.get("stage", ""))
+            eta = format_eta(row.get("eta_sec"))
+            self.progress_text_var.set(f"{self.progress_var.get():5.1f}%  {stage}  ETA {eta}")
+            detail = str(row.get("detail", ""))
+            self.progress_detail_var.set(detail if detail else f"Telemetry: {self.telemetry_file}")
+        elif row.get("where") == "semi_live_chunk":
+            track_path = str(row.get("live_track_path", row.get("track_path", "")) or "")
+            chunk_index = row.get("chunk_index", 0)
+            chunk_count = row.get("chunk_count", 0)
+            rendered_ms = row.get("rendered_ms", 0)
+            if track_path:
+                self.track_path_var.set(track_path)
+            self.progress_detail_var.set(f"Semi-live chunk {chunk_index}/{chunk_count} rendered {rendered_ms} ms")
+
     def poll_telemetry(self) -> None:
         try:
             if not self.telemetry_file.exists():
@@ -546,23 +570,7 @@ class ControlGUI:
                         continue
                     if not isinstance(row, dict):
                         continue
-                    if row.get("where") == "progress":
-                        percent = row.get("percent", 0.0)
-                        if isinstance(percent, (int, float)):
-                            self.progress_var.set(max(0.0, min(100.0, float(percent))))
-                        stage = str(row.get("stage", ""))
-                        eta = format_eta(row.get("eta_sec"))
-                        self.progress_text_var.set(f"{self.progress_var.get():5.1f}%  {stage}  ETA {eta}")
-                        detail = str(row.get("detail", ""))
-                        self.progress_detail_var.set(detail if detail else f"Telemetry: {self.telemetry_file}")
-                    elif row.get("where") == "semi_live_chunk":
-                        track_path = str(row.get("live_track_path", row.get("track_path", "")) or "")
-                        chunk_index = row.get("chunk_index", 0)
-                        chunk_count = row.get("chunk_count", 0)
-                        rendered_ms = row.get("rendered_ms", 0)
-                        if track_path:
-                            self.track_path_var.set(track_path)
-                        self.progress_detail_var.set(f"Semi-live chunk {chunk_index}/{chunk_count} rendered {rendered_ms} ms")
+                    self.apply_telemetry_row(row)
         except OSError as exc:
             self.progress_detail_var.set(f"Telemetry unavailable: {exc}")
         self.root.after(500, self.poll_telemetry)
@@ -594,6 +602,7 @@ class ControlGUI:
 
     def current_analyze_command(self) -> List[str]:
         cache_path = self.current_analysis_cache_path()
+        progress_path = self.analysis_telemetry_file or cache_path.with_suffix(".progress.jsonl")
         return build_analyze_command(
             sys.executable,
             analyze_script_path(),
@@ -601,6 +610,7 @@ class ControlGUI:
             str(cache_path),
             bpm=self.bpm_var.get().strip(),
             slice_grid=self.slice_grid_var.get().strip() or "off",
+            progress_jsonl=str(progress_path),
         )
 
     def update_command_preview(self, *_: object) -> None:
@@ -736,7 +746,11 @@ class ControlGUI:
             return
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         log_path = cache_path.with_suffix(".log")
+        progress_path = cache_path.with_suffix(".progress.jsonl")
         self.analysis_log_path = log_path
+        self.analysis_telemetry_file = progress_path
+        self.analysis_telemetry_pos = 0
+        progress_path.write_text("", encoding="utf-8")
         self.analysis_log_handle = log_path.open("w", encoding="utf-8")
         cmd = self.current_analyze_command()
         try:
@@ -752,13 +766,38 @@ class ControlGUI:
             self.status_var.set(f"Analysis failed to start: {exc}")
             return
         self.status_var.set(f"Analysis running. Log: {log_path}")
+        self.progress_var.set(0.0)
+        self.progress_text_var.set("  0.0%  analysis  ETA --:--")
         self.progress_detail_var.set(f"Analysis cache: {cache_path}")
         self.root.after(500, self.poll_analysis)
+
+    def poll_analysis_telemetry(self) -> None:
+        if not self.analysis_telemetry_file:
+            return
+        try:
+            if not self.analysis_telemetry_file.exists():
+                return
+            with self.analysis_telemetry_file.open("r", encoding="utf-8") as f:
+                f.seek(self.analysis_telemetry_pos)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    self.analysis_telemetry_pos = f.tell()
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict):
+                        self.apply_telemetry_row(row)
+        except OSError as exc:
+            self.progress_detail_var.set(f"Analysis telemetry unavailable: {exc}")
 
     def poll_analysis(self) -> None:
         if not self.analysis_process:
             return
         code = self.analysis_process.poll()
+        self.poll_analysis_telemetry()
         if code is None:
             self.root.after(500, self.poll_analysis)
             return

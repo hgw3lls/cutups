@@ -172,6 +172,11 @@ class LiveControlTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 analyze_audio.validate_args(analyze_audio.parse_args(["--input", str(note)]))
 
+            telemetry_dir = root / "telemetry_dir"
+            telemetry_dir.mkdir()
+            with self.assertRaises(SystemExit):
+                analyze_audio.validate_args(analyze_audio.parse_args(["--input", str(source), "--progress-jsonl", str(telemetry_dir)]))
+
     def test_build_audio_plan_summarizes_events(self) -> None:
         event = cutup.Event(
             layer="voice_main",
@@ -568,6 +573,7 @@ class LiveControlTests(unittest.TestCase):
             "./loops/audio_analysis_cache.json",
             bpm="120",
             slice_grid="1/16",
+            progress_jsonl="./loops/audio_analysis_cache.progress.jsonl",
         )
         self.assertEqual(cmd[:5], ["python", "/repo/PY/analyze_audio.py", "--input", "./loops", "--output"])
         self.assertIn("./loops/audio_analysis_cache.json", cmd)
@@ -576,6 +582,9 @@ class LiveControlTests(unittest.TestCase):
         self.assertIn("120", cmd)
         self.assertIn("--slice-grid", cmd)
         self.assertIn("1/16", cmd)
+        self.assertIn("--progress-jsonl", cmd)
+        self.assertIn("./loops/audio_analysis_cache.progress.jsonl", cmd)
+        self.assertIn("--no-progress", cmd)
 
     def test_live_gui_validate_render_settings_blocks_common_launch_errors(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1303,6 +1312,19 @@ class LiveControlTests(unittest.TestCase):
             self.assertEqual(payload["samples"][0]["zero_crossing_rate"], 0.25)
             self.assertEqual(payload["samples"][0]["grid_cell_summary"]["grid_ms"], 125)
             self.assertEqual(payload["samples"][0]["similarity_vector"]["values"][2], 0.25)
+
+    def test_write_analysis_cache_reports_progress_states(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audio_path = root / "voice.wav"
+            audio_path.write_bytes(b"placeholder")
+            cache = root / "sources.json"
+            args = types.SimpleNamespace(overwrite=True, sample_rate=44100, bpm=0.0, slice_grid="off")
+            sample = cutup.SampleFile(path=audio_path, duration_ms=1000, words=1, intensity_hint=0, loop_hint=0)
+            seen = []
+            with mock.patch.object(cutup, "analysis_entry_for_sample", return_value={"path": str(audio_path), "cache_key": "x"}):
+                cutup.write_analysis_cache(cache, [sample], args, root, progress_callback=lambda index, total, state: seen.append((index, total, state)))
+        self.assertEqual(seen, [(1, 1, "refreshed")])
 
     def test_live_poll_accepts_versioned_controls_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
