@@ -865,8 +865,8 @@ def main() -> None:
 
     root = tk.Tk()
     root.title(args.title)
-    root.geometry("980x760")
-    root.minsize(760, 560)
+    root.geometry("1080x760")
+    root.minsize(820, 580)
 
     _scroll_container, frame = make_scrollable_frame(root)
 
@@ -894,7 +894,16 @@ def main() -> None:
     sc_port_var = tk.StringVar(value="57120")
     sc_age_var = tk.StringVar(value="0.25")
 
-    preset_row = ttk.Frame(frame)
+    tabs = ttk.Notebook(frame)
+    tabs.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+    render_tab = ttk.Frame(tabs, padding=4)
+    sc_tab = ttk.Frame(tabs, padding=4)
+    params_tab = ttk.Frame(tabs, padding=4)
+    tabs.add(render_tab, text="Render")
+    tabs.add(sc_tab, text="SuperCollider")
+    tabs.add(params_tab, text="Parameters")
+
+    preset_row = ttk.Frame(render_tab)
     preset_row.pack(fill=tk.X, pady=(0, 8))
     ttk.Label(preset_row, text="Preset:").pack(side=tk.LEFT)
     preset_var = tk.StringVar(value="Default")
@@ -946,7 +955,7 @@ def main() -> None:
         panic_var=panic_var,
     )
 
-    render_frame = ttk.LabelFrame(frame, text="Render launcher", padding=8)
+    render_frame = ttk.LabelFrame(render_tab, text="Render launcher", padding=8)
     render_frame.pack(fill=tk.X, pady=(8, 8))
 
     ttk.Label(render_frame, text="Input").grid(row=0, column=0, sticky="w")
@@ -998,7 +1007,7 @@ def main() -> None:
     ttk.Button(launch_row, text="Open log", command=gui.open_log).pack(side=tk.LEFT, padx=(8, 0))
     ttk.Label(render_frame, textvariable=validation_var).grid(row=7, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(4, 0))
 
-    progress_frame = ttk.LabelFrame(frame, text="Render progress / playable track", padding=8)
+    progress_frame = ttk.LabelFrame(render_tab, text="Render progress / playable track", padding=8)
     progress_frame.pack(fill=tk.X, pady=(8, 8))
     progress_frame.columnconfigure(1, weight=1)
     progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=100.0)
@@ -1009,7 +1018,7 @@ def main() -> None:
     ttk.Entry(progress_frame, textvariable=track_path_var, state="readonly").grid(row=3, column=1, sticky="ew", padx=(8, 8), pady=(6, 0))
     ttk.Button(progress_frame, text="Open track", command=gui.open_track).grid(row=3, column=2, sticky="e", pady=(6, 0))
 
-    sc_frame = ttk.LabelFrame(frame, text="Send to SuperCollider", padding=8)
+    sc_frame = ttk.LabelFrame(sc_tab, text="Send to SuperCollider", padding=8)
     sc_frame.pack(fill=tk.X, pady=(0, 8))
     sc_frame.columnconfigure(5, weight=1)
 
@@ -1099,7 +1108,7 @@ def main() -> None:
         gui.write_payload()
 
     for key, (low, high, _) in RANGES.items():
-        row = ttk.Frame(frame)
+        row = ttk.Frame(params_tab)
         row.pack(fill=tk.X, pady=4)
         ttk.Label(row, text=key, width=22).pack(side=tk.LEFT)
         scale = ttk.Scale(row, from_=low, to=high, variable=vars_map[key], command=on_slide)
@@ -1115,14 +1124,14 @@ def main() -> None:
 
         bind_value(vars_map[key], value_label)
 
-    filter_row = ttk.Frame(frame)
+    filter_row = ttk.Frame(params_tab)
     filter_row.pack(fill=tk.X, pady=(8, 4))
     ttk.Label(filter_row, text="filter_severity", width=22).pack(side=tk.LEFT)
     filter_combo = ttk.Combobox(filter_row, values=["auto", "light", "medium", "hard"], textvariable=filter_var, state="readonly", width=14)
     filter_combo.pack(side=tk.LEFT, padx=(8, 10))
     filter_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
-    planner_row = ttk.Frame(frame)
+    planner_row = ttk.Frame(params_tab)
     planner_row.pack(fill=tk.X, pady=(4, 4))
     ttk.Label(planner_row, text="section_arc", width=22).pack(side=tk.LEFT)
     arc_combo = ttk.Combobox(planner_row, values=SECTION_ARCS, textvariable=arc_var, state="readonly", width=14)
@@ -1133,20 +1142,20 @@ def main() -> None:
     arc_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
     score_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
-    placement_row = ttk.Frame(frame)
+    placement_row = ttk.Frame(params_tab)
     placement_row.pack(fill=tk.X, pady=(4, 4))
     ttk.Label(placement_row, text="baseline_placement", width=22).pack(side=tk.LEFT)
     placement_combo = ttk.Combobox(placement_row, values=BASELINE_PLACEMENTS, textvariable=placement_var, state="readonly", width=14)
     placement_combo.pack(side=tk.LEFT, padx=(8, 10))
     placement_combo.bind("<<ComboboxSelected>>", lambda _e: gui.write_payload())
 
-    btns = ttk.Frame(frame)
+    btns = ttk.Frame(params_tab)
     btns.pack(fill=tk.X, pady=(10, 8))
     ttk.Button(btns, text="Apply preset", command=lambda: gui.apply_preset(preset_var.get())).pack(side=tk.LEFT)
     ttk.Button(btns, text="Reset defaults", command=gui.reset_defaults).pack(side=tk.LEFT, padx=(8, 0))
     ttk.Button(btns, text="Write now", command=gui.write_payload).pack(side=tk.LEFT, padx=(8, 0))
 
-    conductor = ttk.LabelFrame(frame, text="Conductor controls", padding=8)
+    conductor = ttk.LabelFrame(params_tab, text="Conductor controls", padding=8)
     conductor.pack(fill=tk.X, pady=(8, 8))
     ttk.Label(conductor, text="Force section").grid(row=0, column=0, sticky="w")
     sec_combo = ttk.Combobox(conductor, values=["", "ENTRY", "BUILD", "PRESSURE", "COLLAPSE", "AFTERIMAGE"], textvariable=section_var, state="readonly", width=16)

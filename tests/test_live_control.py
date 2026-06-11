@@ -39,6 +39,7 @@ def _install_pydub_stubs() -> None:
 
 _install_pydub_stubs()
 
+from PY import analyze_audio  # noqa: E402
 from PY import cutup  # noqa: E402
 from PY import live_control_gui  # noqa: E402
 from PY import live_control_td_bridge as td_bridge  # noqa: E402
@@ -105,6 +106,71 @@ class LiveControlTests(unittest.TestCase):
         packet, target = sock.sendto.call_args.args
         self.assertIn(b"/cutups/stab\0", packet)
         self.assertEqual(target, ("127.0.0.1", 57120))
+
+    def test_live_gui_exposes_workflow_tabs(self) -> None:
+        source = (REPO_ROOT / "PY" / "live_control_gui.py").read_text(encoding="utf-8")
+        self.assertIn("ttk.Notebook(frame)", source)
+        self.assertIn('tabs.add(render_tab, text="Render")', source)
+        self.assertIn('tabs.add(sc_tab, text="SuperCollider")', source)
+        self.assertIn('tabs.add(params_tab, text="Parameters")', source)
+        self.assertIn("ttk.LabelFrame(render_tab, text=\"Render launcher\"", source)
+        self.assertIn("ttk.LabelFrame(sc_tab, text=\"Send to SuperCollider\"", source)
+        self.assertIn("ttk.Frame(params_tab)", source)
+
+    def test_live_gui_sc_preset_and_cue_methods_send_expected_osc(self) -> None:
+        class Recorder:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def send_sc(self, address: str, *args: object) -> None:
+                self.calls.append((address, args))
+
+        recorder = Recorder()
+        expected = [
+            ("send_sc_preset_balanced", "/cutups/scLive/preset", ("balanced",)),
+            ("send_sc_preset_breach", "/cutups/scLive/preset", ("signal-breach",)),
+            ("send_sc_preset_ghost", "/cutups/scLive/preset", ("ghost-transmission",)),
+            ("send_sc_preset_beat", "/cutups/scLive/preset", ("beat-stutter",)),
+            ("send_sc_preset_spoken", "/cutups/scLive/preset", ("spoken-word",)),
+            ("send_sc_cue_balanced", "/cutups/scLive/cue", ("balanced",)),
+            ("send_sc_cue_breach", "/cutups/scLive/cue", ("signal-breach",)),
+            ("send_sc_cue_ghost", "/cutups/scLive/cue", ("ghost-transmission",)),
+            ("send_sc_cue_beat", "/cutups/scLive/cue", ("beat-stutter",)),
+            ("send_sc_cue_spoken", "/cutups/scLive/cue", ("spoken-word",)),
+        ]
+
+        for method_name, _address, _args in expected:
+            getattr(live_control_gui.ControlGUI, method_name)(recorder)
+
+        self.assertEqual(recorder.calls, [(address, args) for _, address, args in expected])
+
+    def test_analyze_audio_defaults_cache_path_beside_input(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            source.write_bytes(b"placeholder")
+            self.assertEqual(analyze_audio.default_cache_path(root), root.resolve() / "audio_analysis_cache.json")
+            self.assertEqual(analyze_audio.default_cache_path(source), root.resolve() / "voice_audio_analysis_cache.json")
+
+    def test_analyze_audio_validate_args_rejects_incomplete_grid_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "loop.wav"
+            source.write_bytes(b"placeholder")
+            args = analyze_audio.validate_args(
+                analyze_audio.parse_args(["--input", str(source), "--bpm", "120", "--slice-grid", "1/16", "--max-files", "2"])
+            )
+            self.assertEqual(args.bpm, 120)
+            self.assertEqual(args.slice_grid, "1/16")
+            self.assertEqual(args.max_files, 2)
+
+            with self.assertRaises(SystemExit):
+                analyze_audio.validate_args(analyze_audio.parse_args(["--input", str(source), "--slice-grid", "1/16"]))
+
+            note = root / "notes.txt"
+            note.write_text("not audio", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                analyze_audio.validate_args(analyze_audio.parse_args(["--input", str(note)]))
 
     def test_build_audio_plan_summarizes_events(self) -> None:
         event = cutup.Event(
