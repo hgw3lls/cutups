@@ -219,7 +219,7 @@ s.waitForBoot({
 			if(~liveInBtn.notNil) { ~liveInBtn.value = 0 };
 			if(~liveCutBtn.notNil) { ~liveCutBtn.value = 0 };
 			if(~bedBtn.notNil) { ~bedBtn.value = 0 };
-			~bedSlotBtns.valuesDo { |btn| if(btn.notNil) { btn.value = 0 } };
+			~bedSlotBtns.values.do { |btn| if(btn.notNil) { btn.value = 0 } };
 		}.defer;
 	};
 
@@ -300,7 +300,7 @@ s.waitForBoot({
 		~active.removeAt(\bedLoops);
 		{
 			if(~bedBtn.notNil) { ~bedBtn.value = 0 };
-			~bedSlotBtns.valuesDo { |btn| if(btn.notNil) { btn.value = 0 } };
+			~bedSlotBtns.values.do { |btn| if(btn.notNil) { btn.value = 0 } };
 		}.defer;
 	};
 
@@ -1221,7 +1221,7 @@ s.waitForBoot({
 		~updateMasterFX.();
 		~updateLiveTrackAmp.();
 		~updateLiveInputMonitor.();
-		~bedSlots.valuesDo { |synth|
+		~bedSlots.values.do { |synth|
 			if(synth.notNil) {
 				try { synth.set(\amp, ~bedAmp, \dropout, ~bedDropout, \reverse, ~bedReverse.binaryValue) };
 			};
@@ -1821,7 +1821,7 @@ s.waitForBoot({
 
 	~setBedReverse = { |flag|
 		~bedReverse = flag.asInteger > 0;
-		~bedSlots.valuesDo { |synth|
+		~bedSlots.values.do { |synth|
 			if(synth.notNil) {
 				try { synth.set(\reverse, ~bedReverse.binaryValue) };
 			};

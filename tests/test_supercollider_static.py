@@ -100,6 +100,12 @@ class SuperColliderStaticTests(unittest.TestCase):
         ):
             self.assertIn(marker, text)
 
+    def test_tape_deck_avoids_values_do_for_dictionary_compatibility(self) -> None:
+        text = (REPO_ROOT / "SC" / "cutup.scd").read_text(encoding="utf-8")
+        self.assertNotIn("valuesDo", text)
+        self.assertIn("~bedSlotBtns.values.do", text)
+        self.assertIn("~bedSlots.values.do", text)
+
 
 if __name__ == "__main__":
     unittest.main()
