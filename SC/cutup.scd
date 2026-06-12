@@ -68,6 +68,7 @@ s.waitForBoot({
 	~loadFailCount = 0;
 	~loadedCount = 0;
 	~loadedPaths = Dictionary.new;
+	~loadQueueDelay = 0.015;
 
 	~chunkRefreshRoutine = nil;
 	~chunkRefreshSec = 3.0;
@@ -833,10 +834,26 @@ s.waitForBoot({
 		~setCount.("Loaded: 0 / " ++ ~loadTargetCount);
 		~setProgress.(0.25);
 
-		~allPaths.do { |path|
-			("QUEUE LOAD: " ++ path).postln;
-			~loadOnePath.(path, attemptId);
-		};
+		~loaderRoutine = Routine({
+			~allPaths.do { |path, i|
+				if(attemptId == ~loadAttemptId) {
+					var queued;
+					queued = i + 1;
+					("QUEUE LOAD " ++ queued ++ "/" ++ ~loadTargetCount ++ ": " ++ path).postln;
+					~setStatus.("Queueing buffer " ++ queued ++ " / " ++ ~loadTargetCount);
+					~setCount.("Queued: " ++ queued ++ " / " ++ ~loadTargetCount ++ " | Loaded: " ++ ~loadedCount);
+					~setProgress.(0.05 + ((queued / ~loadTargetCount) * 0.20));
+					~loadOnePath.(path, attemptId);
+					~loadQueueDelay.wait;
+				};
+			};
+			if(attemptId == ~loadAttemptId) {
+				~loaderRoutine = nil;
+				~active.removeAt(\loader);
+				~setStatus.("Queued all buffers — waiting for reads");
+			};
+		}).play(SystemClock);
+		~active[\loader] = ~loaderRoutine;
 	};
 
 	// ============================================================
@@ -2188,11 +2205,12 @@ s.waitForBoot({
 	~startScene = {
 		var sceneRoutine;
 
-		("SCENE CHECK -> buffers: " ++ ~buffers.size ++ " sampleMeta: " ++ ~sampleMeta.size).postln;
-
 		if(~canStartPlayback.(~sceneBtn).not) {
+			("SCENE BLOCKED -> loading=" ++ ~loadingInProgress.().asString ++ " loaded=" ++ ~loadedCount ++ "/" ++ ~loadTargetCount ++ " buffers=" ++ ~buffers.size ++ " sampleMeta=" ++ ~sampleMeta.size).postln;
 			^false;
 		};
+
+		("SCENE CHECK -> buffers: " ++ ~buffers.size ++ " sampleMeta: " ++ ~sampleMeta.size).postln;
 
 		~stopSceneOnly.();
 
